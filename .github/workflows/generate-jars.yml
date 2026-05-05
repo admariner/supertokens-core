@@ -152,6 +152,9 @@ jobs:
               git tag --delete "v${PI_VER}" 2>/dev/null || true
               git tag "v${PI_VER}" HEAD
               if git push --force origin "v${PI_VER}"; then
+                PI_MINOR=$(echo "${PI_VER}" | cut -d. -f1,2)
+                git push origin "HEAD:refs/heads/${PI_MINOR}" || \
+                  echo "::warning::Branch ${PI_MINOR} is ahead of v${PI_VER} — commit reachable only via tag"
                 echo "✓ Committed plugin-interface JARs to GitHub and updated tag v${PI_VER}"
               else
                 echo "::warning::Committed plugin-interface JARs but failed to update tag v${PI_VER} on GitHub"
@@ -202,6 +205,9 @@ jobs:
               git tag --delete "v${PG_VER}" 2>/dev/null || true
               git tag "v${PG_VER}" HEAD
               if git push --force origin "v${PG_VER}"; then
+                PG_MINOR=$(echo "${PG_VER}" | cut -d. -f1,2)
+                git push origin "HEAD:refs/heads/${PG_MINOR}" || \
+                  echo "::warning::Branch ${PG_MINOR} is ahead of v${PG_VER} — commit reachable only via tag"
                 echo "✓ Committed postgresql-plugin JARs to GitHub and updated tag v${PG_VER}"
               else
                 echo "::warning::Committed postgresql-plugin JARs but failed to update tag v${PG_VER} on GitHub"
@@ -259,6 +265,9 @@ jobs:
               git tag --delete "v${CORE_VER}" 2>/dev/null || true
               git tag "v${CORE_VER}" HEAD
               if git push --force origin "v${CORE_VER}"; then
+                CORE_MINOR=$(echo "${CORE_VER}" | cut -d. -f1,2)
+                git push origin "HEAD:refs/heads/${CORE_MINOR}" || \
+                  echo "::warning::Branch ${CORE_MINOR} is ahead of v${CORE_VER} — commit reachable only via tag"
                 echo "✓ Committed core JARs to GitHub and updated tag v${CORE_VER}"
               else
                 echo "::warning::Committed core JARs but failed to update tag v${CORE_VER} on GitHub"
