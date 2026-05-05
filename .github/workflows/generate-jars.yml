@@ -7,6 +7,11 @@ on:
         description: 'Core version to regenerate JARs for (e.g. 11.4.0, no v prefix)'
         required: true
         type: string
+      java-version:
+        description: 'JDK version used to build (e.g. 21.0.7 for modern releases, 15.0.2 for older backports)'
+        required: false
+        type: string
+        default: '21.0.7'
       commit-to-github:
         description: 'Also commit the generated JARs to the GitHub repositories and update tags'
         required: false
@@ -18,10 +23,10 @@ jobs:
     environment: publish
     runs-on: ubuntu-latest
     steps:
-      - name: Set up JDK 21.0.7
+      - name: Set up JDK ${{ inputs.java-version }}
         uses: actions/setup-java@v2
         with:
-          java-version: 21.0.7
+          java-version: ${{ inputs.java-version }}
           distribution: zulu
 
       - name: Checkout supertokens-root
@@ -29,6 +34,7 @@ jobs:
         with:
           repository: supertokens/supertokens-root
           path: ./supertokens-root
+          ref: ${{ startsWith(inputs.java-version, '15') && 'for_jdk_15_releases' || 'master' }}
 
       - name: Clone repositories
         run: |
@@ -54,20 +60,33 @@ jobs:
           fi
           echo "Plugin-interface minor: $PI_MINOR"
 
-          # Latest plugin-interface release tag for this minor
+          # Capture the core tag's commit date — used to select contemporary versions
+          # for backport releases (avoids picking a plugin released after the core tag)
+          CORE_TAG_DATE=$(git -C "$CORE_DIR" log -1 --format=%aI "v${CORE_VER}")
+          echo "Core tag date: $CORE_TAG_DATE"
+
+          # Latest plugin-interface release tag for this minor, at or before the core tag date
           PI_VER=$(git -C "$PI_DIR" tag \
             | grep -E "^v${PI_MINOR}\." \
             | sed 's/^v//' \
-            | sort -V | tail -1)
+            | sort -V \
+            | while read ver; do
+                tag_date=$(git -C "$PI_DIR" log -1 --format=%aI "v${ver}" 2>/dev/null || true)
+                [[ "$tag_date" <= "$CORE_TAG_DATE" ]] && echo "$ver"
+              done \
+            | tail -1)
           if [[ -z "$PI_VER" ]]; then
-            echo "Error: no plugin-interface tag found for minor ${PI_MINOR}" >&2
+            echo "Error: no plugin-interface tag found for minor ${PI_MINOR} at or before ${CORE_TAG_DATE}" >&2
             exit 1
           fi
           echo "Plugin-interface version: $PI_VER"
 
-          # Latest postgresql-plugin tag whose pluginInterfaceSupported.json matches the same minor
+          # Latest postgresql-plugin tag whose pluginInterfaceSupported.json matches the same minor,
+          # at or before the core tag date
           PG_VER=""
           for pg_tag in $(git -C "$PG_DIR" tag --sort=-version:refname | grep -E '^v[0-9]'); do
+            tag_date=$(git -C "$PG_DIR" log -1 --format=%aI "${pg_tag}" 2>/dev/null || true)
+            [[ "$tag_date" > "$CORE_TAG_DATE" ]] && continue
             pg_pi=$(git -C "$PG_DIR" show "${pg_tag}:pluginInterfaceSupported.json" 2>/dev/null \
               | jq -r '.versions[0]' 2>/dev/null || true)
             if [[ "$pg_pi" == "$PI_MINOR" ]]; then
@@ -76,7 +95,7 @@ jobs:
             fi
           done
           if [[ -z "$PG_VER" ]]; then
-            echo "Error: no postgresql-plugin tag found for plugin-interface minor ${PI_MINOR}" >&2
+            echo "Error: no postgresql-plugin tag found for plugin-interface minor ${PI_MINOR} at or before ${CORE_TAG_DATE}" >&2
             exit 1
           fi
           echo "PostgreSQL-plugin version: $PG_VER"
