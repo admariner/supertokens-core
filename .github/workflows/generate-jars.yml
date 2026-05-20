@@ -125,10 +125,10 @@ jobs:
             done
           } > settings.gradle
 
-      - name: Copy JRE into core distribution directory
+      - name: Copy JRE into distribution directory
         run: |
-          cp -rL "$JAVA_HOME" supertokens-root/supertokens-core/jre
-          chmod -R +x supertokens-root/supertokens-core/jre/bin/
+          cp -rL "$JAVA_HOME" supertokens-root/jre
+          chmod -R +x supertokens-root/jre/bin/
 
       - name: Git config
         run: |

@@ -183,10 +183,10 @@ jobs:
           path: supertokens-root/supertokens-postgresql-plugin
           ref: ${{ needs.dependency-branches.outputs.postgresql-sha }}
 
-      - name: Copy JRE into core distribution directory
+      - name: Copy JRE into distribution directory
         run: |
-          cp -rL "$JAVA_HOME" supertokens-root/supertokens-core/jre
-          chmod -R +x supertokens-root/supertokens-core/jre/bin/
+          cp -rL "$JAVA_HOME" supertokens-root/jre
+          chmod -R +x supertokens-root/jre/bin/
 
       - name: Load modules
         run: |
@@ -336,10 +336,10 @@ jobs:
       - name: Setup test environment
         run: cd supertokens-root && ./utils/setupTestEnv --local
 
-      - name: Copy JRE into core distribution directory
+      - name: Copy JRE into distribution directory
         run: |
-          cp -rL "$JAVA_HOME" supertokens-root/supertokens-core/jre
-          chmod -R +x supertokens-root/supertokens-core/jre/bin/
+          cp -rL "$JAVA_HOME" supertokens-root/jre
+          chmod -R +x supertokens-root/jre/bin/
 
       - name: Generate config file
         run: |
@@ -462,10 +462,10 @@ jobs:
           git clone https://${{ secrets.GH_TOKEN }}@github.com/supertokens/supertokens-postgresql-plugin.git
           git -C supertokens-postgresql-plugin checkout ${{ needs.dependency-branches.outputs.postgresql-sha }}
 
-      - name: Copy JRE into core distribution directory
+      - name: Copy JRE into distribution directory
         run: |
-          cp -rL "$JAVA_HOME" supertokens-root/supertokens-core/jre
-          chmod -R +x supertokens-root/supertokens-core/jre/bin/
+          cp -rL "$JAVA_HOME" supertokens-root/jre
+          chmod -R +x supertokens-root/jre/bin/
 
       - name: Write release password
         run: |
