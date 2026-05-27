@@ -228,26 +228,11 @@ public abstract class Utils extends Mockito {
 
     public static TestRule getOnFailure() {
         return new TestWatcher() {
-            private Map<String, Map<String, Double>> pgStatBefore;
-
-            @Override
-            protected void starting(Description description) {
-                pgStatBefore = DatabaseTestHelper.takePgStatMonitorSnapshot(
-                        DatabaseTestHelper.getCurrentTestDatabase());
-            }
-
             @Override
             protected void failed(Throwable e, Description description) {
                 if (byteArrayOutputStream != null) {
                     System.out.println(byteArrayOutputStream.toString(StandardCharsets.UTF_8));
                 }
-            }
-
-            @Override
-            protected void finished(Description description) {
-                String testName = description.getClassName() + "." + description.getMethodName();
-                DatabaseTestHelper.collectPgStatMonitorData(
-                        DatabaseTestHelper.getCurrentTestDatabase(), testName, pgStatBefore);
             }
         };
     }
