@@ -55,7 +55,7 @@ public class FeatureFlagTest {
     public TestRule watchman = Utils.getOnFailure();
 
     @Rule
-    public TestRule retryFlaky = Utils.retryFlakyTest();
+    public TestRule retryFlaky = Utils.retryFlakyTest(2);
 
     @AfterClass
     public static void afterTesting() {
@@ -186,6 +186,9 @@ public class FeatureFlagTest {
             JsonObject usageStats = response.get("usageStats").getAsJsonObject();
             JsonArray maus = usageStats.get("maus").getAsJsonArray();
 
+//            System.out.println(features);
+//            System.out.println(usageStats);
+//            System.out.println(maus);
             if (StorageLayer.isInMemDb(process.getProcess())) {
                 assert features.size() == EE_FEATURES.values().length;
             } else {

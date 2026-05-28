@@ -78,6 +78,7 @@ public class ProcessBulkImportUsers extends CronTask {
                 + " batch size, one batch split into " + numberOfBatchChunks + " chunks");
 
         executorService = Executors.newFixedThreadPool(numberOfBatchChunks);
+
         String[] allUserRoles = StorageUtils.getUserRolesStorage(bulkImportSQLStorage).getRoles(app);
 
         // Each worker self-selects its own chunk using SELECT FOR UPDATE SKIP LOCKED inside a transaction,
@@ -126,9 +127,9 @@ public class ProcessBulkImportUsers extends CronTask {
         } catch (InterruptedException e) {
             Logging.error(main, app.getAsPublicTenantIdentifier(), "Error while processing bulk import users", true, e);
             throw new RuntimeException(e);
+        } finally {
+            executorService.shutdownNow();
         }
-
-        executorService.shutdownNow();
 
         // Signal completion for tests that wait on this event.
         // Only fire when users were actually processed to avoid spurious events

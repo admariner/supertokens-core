@@ -70,6 +70,7 @@ import io.supertokens.pluginInterface.oauth.OAuthLogoutChallenge;
 import io.supertokens.pluginInterface.oauth.OAuthStorage;
 import io.supertokens.pluginInterface.oauth.exception.DuplicateOAuthLogoutChallengeException;
 import io.supertokens.pluginInterface.oauth.exception.OAuthClientNotFoundException;
+import io.supertokens.pluginInterface.oauth.sqlStorage.OAuthSQLStorage;
 import io.supertokens.pluginInterface.opentelemetry.OtelProvider;
 import io.supertokens.pluginInterface.passwordless.PasswordlessCode;
 import io.supertokens.pluginInterface.passwordless.PasswordlessDevice;
@@ -136,7 +137,7 @@ public class Start
         implements SessionSQLStorage, EmailPasswordSQLStorage, EmailVerificationSQLStorage, ThirdPartySQLStorage,
         JWTRecipeSQLStorage, PasswordlessSQLStorage, UserMetadataSQLStorage, UserRolesSQLStorage, UserIdMappingStorage,
         UserIdMappingSQLStorage, MultitenancyStorage, MultitenancySQLStorage, TOTPSQLStorage, ActiveUsersStorage,
-        ActiveUsersSQLStorage, DashboardSQLStorage, AuthRecipeSQLStorage, OAuthStorage, WebAuthNSQLStorage,
+        ActiveUsersSQLStorage, DashboardSQLStorage, AuthRecipeSQLStorage, OAuthStorage, OAuthSQLStorage, WebAuthNSQLStorage,
         SAMLStorage, UserLockingStorage, AccountInfoStorage, MigrationBackfillStorage {
 
     private static final Object appenderLock = new Object();
@@ -3607,6 +3608,31 @@ public class Start
             throws StorageQueryException {
         try {
             return OAuthQueries.getRefreshTokenMapping(this, appIdentifier, externalRefreshToken);
+        } catch (SQLException e) {
+            throw new StorageQueryException(e);
+        }
+    }
+
+    @Override
+    public String getRefreshTokenMappingForUpdate_Transaction(AppIdentifier appIdentifier, TransactionConnection con,
+                                                              String externalRefreshToken)
+            throws StorageQueryException {
+        try {
+            return OAuthQueries.getRefreshTokenMappingForUpdate(this, (Connection) con.getConnection(),
+                    appIdentifier, externalRefreshToken);
+        } catch (SQLException e) {
+            throw new StorageQueryException(e);
+        }
+    }
+
+    @Override
+    public void updateOAuthSessionInternal_Transaction(AppIdentifier appIdentifier, TransactionConnection con,
+                                                       String gid, String newInternalRefreshToken,
+                                                       String sessionHandle, String jti, long exp)
+            throws StorageQueryException {
+        try {
+            OAuthQueries.updateOAuthSessionInternal(this, (Connection) con.getConnection(),
+                    appIdentifier, gid, newInternalRefreshToken, sessionHandle, jti, exp);
         } catch (SQLException e) {
             throw new StorageQueryException(e);
         }

@@ -7,6 +7,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [11.4.4]
+
+- Fix: adds the otel-javaagent to the installed distribution
+- Fix: validate licenseKey field to reject misspelled or malformed input
+
+## [11.4.3]
+
+- Fix: uses the right transaction isolation level with oauth2 refresh tokens to avoid false-positive conflicts at DB
+  level
+
+## [11.4.2]
+
+- Fixes Tenant/App/CUD APIs to not to lock the whole world for a read
+- Fixes concurrency issue with oauth refresh tokens
+
+## [11.4.1]
+
+- Fixes OTEL initialization when there is no javaagent
+- Fixes a thread-leak issue with Bulk Migration
+
 ## [11.4.0]
 
 - Exposes bulk query APIs for usermetadata and TOTP
