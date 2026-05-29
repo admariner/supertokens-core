@@ -718,12 +718,22 @@ public class StorageLayer extends ResourceDistributor.SingletonResource {
      * work can take tens of milliseconds per pool; holding the global lock during I/O would
      * serialize all N pools and turn startup into O(N × latency) instead of O(latency).
      *
-     * <p>The map is keyed by unique {@link Storage} instances, so each pool is initialized
-     * exactly once even when multiple tenants share a pool. {@code initStorage()} also
-     * carries an internal {@code isAlreadyInitialised} guard, making concurrent calls safe.
+     * <p>The map is deduplicated by {@link Storage} instance, so each pool is initialized
+     * exactly once even when multiple tenants share a pool. We are therefore not actually
+     * racing concurrent {@code initStorage()} calls against each other on a single instance —
+     * the per-instance {@code isAlreadyInitialised} guard inside {@code initStorage()} is
+     * belt-and-braces, not load-bearing here.
      *
-     * <p>Per-pool failures are logged and swallowed, matching the original sequential
-     * behaviour: a non-base-tenant pool failure must not prevent other tenants from working.
+     * <p>Per-pool failures are caught and logged: a non-base-tenant pool failure must not
+     * prevent other tenants from working, matching the original sequential behaviour.
+     * {@code DbInitException} is the only checked exception either method declares;
+     * {@code initFileLogging} declares none. Anything else (e.g. a {@link RuntimeException}
+     * from log file setup) is propagated through {@code CompletableFuture.join()} as a
+     * {@code CompletionException} and crashes startup — same as the original sequential
+     * code, where such an exception would have escaped the for-loop unhandled.
+     *
+     * <p>The try-with-resources {@code close()} on the executor runs after {@code join()},
+     * by which time all tasks have terminated, so close is effectively a no-op.
      */
     private static void initStoragesInParallel(Main main, Map<Storage, Set<TenantIdentifier>> storagesToInit) {
         if (storagesToInit.isEmpty()) {
