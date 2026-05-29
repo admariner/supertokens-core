@@ -7,7 +7,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [11.4.5]
+## [12.0.0]
 
 - Fix: upgrade embedded tomcat and the OTEL related libs because of security vulnerabilities
 
