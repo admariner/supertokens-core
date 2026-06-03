@@ -11,6 +11,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Fix: SAML attribute values with `xsi:type="xsd:string"` are no longer silently dropped
 - Fix: SAML email extraction now checks `mail` and `email` claim attributes in addition to the WS-Federation URI claim and NameID
+- Fix: fixes permission issues with the installer's jre
+- Fix: upgrade embedded tomcat and the OTEL related libs because of security vulnerabilities
 
 ## [11.4.4]
 
