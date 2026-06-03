@@ -7,6 +7,65 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [12.0.0]
+
+### Background
+
+1. **Lower the transaction isolation level from SERIALIZABLE to READ_COMMITTED.** The previous default made the
+   database the bottleneck on multi-tenant workloads: SI-lock accumulation on the auth-recipe paths drove
+   serialization retries and pushed Postgres into thrashing under realistic concurrency. READ_COMMITTED is the
+   new baseline for every storage operation, dropping the per-transaction cost on signup, link, makePrimary,
+   updateEmail, and addUserIdToTenant. The correctness lost in lowering the isolation level is recovered by
+   structural changes below, not by application-level retries.
+
+2. **Push invariants into the database schema instead of carrying them in application logic.** Account-info
+   uniqueness was previously enforced by Java-side conflict checks reading projections of
+   `all_auth_recipe_users` — correct only because SERIALIZABLE made the read-then-write effectively atomic. The
+   new reservation tables (in the postgresql-plugin release) encode the same rules as primary-key constraints,
+   so the database itself is the referee. Core's role shrinks accordingly: it acquires a `LockedUser` token for
+   operations that need cross-row serialization, calls the new storage methods, and translates returned
+   conflicts into the existing API responses. No HTTP contract changes.
+
+For operators, the rollout is staged behind a per-tenant `migration_mode` config that lets you walk from
+`LEGACY` (current production behaviour) to `MIGRATED` (new tables only) one step at a time, with backfill
+running between the two midpoints. The new state-machine validator in `MigrationModeTransition` enforces
+single-step transitions and refuses the final flip while any user still needs backfilling, so it's hard to
+accidentally cut over too early. See `SCHEMA-REWORK.md` for the end-to-end runbook.
+
+### Added
+
+- `migration.MigrationModeTransition` — state-machine validator that runs from
+  `Multitenancy.validateTenantConfig` whenever a tenant-config CRUD payload carries
+  `coreConfig.migration_mode`. Refuses non-adjacent transitions and runs a `getBackfillPendingUsersCount` probe
+  before allowing `DUAL_WRITE_READ_NEW → MIGRATED`.
+- `cronjobs.backfill.BackfillReservationTables` — per-app, 5-minute, self-skipping when mode is `LEGACY`.
+  Resumes implicitly on restart (`WHERE time_joined = 0`).
+- `GET /migration/mode` and `GET /migration/backfill/progress[?verify=true]` — read-only operator endpoints,
+  both root-CUD-aware.
+- `migration-scripts/migration-backfill.sql`, `migration-scripts/dump_old_canonical.sql`, and
+  `migration-scripts/dump_new_canonical.sql` — offline backfill plus side-by-side data parity dump.
+- Initialisation: storages now warm up in parallel during boot.
+
+### Changed
+
+- `Multitenancy.addNewOrUpdateAppOrTenant` validates the migration-mode transition before persisting the
+  tenant config.
+- Core-side conflict detection for `makePrimaryUser` / `linkAccounts` / `updateEmail` rewritten on top of the
+  new `LockedUser` interfaces; the storage-cast and read-only narrowing now go through
+  `StorageUtils.getAuthRecipeReadOnlyStorage`.
+- Session-refresh path no longer upserts `user_last_active` on every request — now throttled.
+- InMemoryDB write/read paths mirror PG dispatch for testability. InMemoryDB defaults to `MIGRATED` for tests.
+
+### Removed
+
+- The earlier bespoke `PUT /migration/mode` endpoint and `setMigrationMode` storage call. Mode is now set
+  exclusively through `PUT /recipe/multitenancy/connectionuridomain/v2` with `coreConfig.migration_mode`.
+
+### Migration notes
+
+- See `SCHEMA-REWORK.md` for the operator runbook (online LEGACY → MIGRATED via the cron, or offline via
+  `migration-scripts/migration-backfill.sql` during a maintenance window).
+
 ## [11.4.4]
 
 - Fix: adds the otel-javaagent to the installed distribution
