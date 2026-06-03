@@ -45,6 +45,11 @@ on:
         required: true
         type: boolean
         default: false
+      push-to-ecr:
+        description: 'Push Docker images to Amazon ECR'
+        required: true
+        type: boolean
+        default: true
 
 jobs:
   # ── Resolve branches for the given versions ───────────────────────
@@ -397,7 +402,7 @@ jobs:
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Tag and push release images
+      - name: Tag and push release images to Docker Hub
         run: |
           tag="${{ inputs.core-version }}"
           major=$(echo "$tag" | cut -d. -f1)
@@ -427,6 +432,55 @@ jobs:
               bash .github/helpers/release-docker.sh \
                 "supertokens/supertokens-dev-postgresql:$dev_tag" \
                 "supertokens/supertokens-postgresql:latest"
+            fi
+          fi
+
+      - name: Configure AWS credentials
+        if: inputs.push-to-ecr
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        if: inputs.push-to-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Tag and push release images to ECR
+        if: inputs.push-to-ecr
+        run: |
+          ecr_registry="${{ secrets.ECR_REGISTRY }}"
+          ecr_repo="${{ vars.ECR_REPOSITORY }}"
+          tag="${{ inputs.core-version }}"
+          major=$(echo "$tag" | cut -d. -f1)
+          minor=$(echo "$tag" | cut -d. -f1,2)
+          dev_tag="${{ needs.build-docker.outputs.dev-tag }}"
+          dev_image="supertokens/supertokens-dev-postgresql:$dev_tag"
+
+          if [ "${{ inputs.is-canary }}" == "true" ]; then
+            bash .github/helpers/release-docker.sh \
+              "$dev_image" \
+              "$ecr_registry/$ecr_repo:$tag-canary"
+          else
+            bash .github/helpers/release-docker.sh \
+              "$dev_image" \
+              "$ecr_registry/$ecr_repo:$tag"
+
+            bash .github/helpers/release-docker.sh \
+              "$dev_image" \
+              "$ecr_registry/$ecr_repo:$minor"
+
+            if [ "${{ inputs.is-latest-for-major }}" == "true" ]; then
+              bash .github/helpers/release-docker.sh \
+                "$dev_image" \
+                "$ecr_registry/$ecr_repo:$major"
+            fi
+
+            if [ "${{ inputs.is-latest-release }}" == "true" ]; then
+              bash .github/helpers/release-docker.sh \
+                "$dev_image" \
+                "$ecr_registry/$ecr_repo:latest"
             fi
           fi
 
