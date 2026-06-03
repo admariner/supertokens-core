@@ -566,6 +566,7 @@ jobs:
               --title "$tag" \
               --target "${{ needs.dependency-branches.outputs.plugin-interface-sha }}" \
               --generate-notes \
+              --prerelease \
               --latest=false
           else
             gh release create "v${{ inputs.plugin-interface-version }}" \
@@ -594,6 +595,7 @@ jobs:
               --title "$tag" \
               --target "${{ needs.dependency-branches.outputs.postgresql-sha }}" \
               --generate-notes \
+              --prerelease \
               --latest=false
           else
             gh release create "v${{ inputs.postgresql-plugin-version }}" \
@@ -622,6 +624,7 @@ jobs:
               --title "$tag" \
               --target "${{ needs.dependency-branches.outputs.core-sha }}" \
               --generate-notes \
+              --prerelease \
               --latest=false
           else
             gh release create "v${{ inputs.core-version }}" \
