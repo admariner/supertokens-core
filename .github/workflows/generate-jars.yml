@@ -125,11 +125,6 @@ jobs:
             done
           } > settings.gradle
 
-      - name: Copy JRE into distribution directory
-        run: |
-          cp -rL "$JAVA_HOME" supertokens-root/jre
-          chmod -R +x supertokens-root/jre/bin/
-
       - name: Git config
         run: |
           git config --global user.name "Supertokens Bot"

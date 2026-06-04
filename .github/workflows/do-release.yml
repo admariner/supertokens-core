@@ -139,3 +139,12 @@ jobs:
       is-canary: ${{ inputs.is-canary }}
       is-latest-release: ${{ inputs.is-latest-release }}
     secrets: inherit
+
+  build-jars:
+    needs: [add-release-tags]
+    if: ${{ !cancelled() && !failure() && !inputs.is-canary }}
+    uses: ./.github/workflows/generate-jars.yml
+    with:
+      core-version: ${{ inputs.core-version }}
+      commit-to-github: true
+    secrets: inherit
