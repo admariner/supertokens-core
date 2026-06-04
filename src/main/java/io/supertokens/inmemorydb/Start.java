@@ -2604,6 +2604,13 @@ public class Start
             String recipeId = GeneralQueries.getRecipeIdForUser_Transaction(lockedUser);
 
             MigrationMode mode = Config.getConfig(this).getMigrationMode();
+            if (!mode.writesToOldTables()) {
+                // MIGRATED mode: only new tables exist; the return value comes from the new-table insert.
+                boolean added = AccountInfoQueries.addTenantIdToRecipeUser_Transaction(this, sqlCon, tenantIdentifier, lockedUser);
+                sqlCon.commit();
+                return added;
+            }
+
             if (mode.writesToNewTables()) {
                 AccountInfoQueries.addTenantIdToRecipeUser_Transaction(this, sqlCon, tenantIdentifier, lockedUser);
             }
@@ -2678,6 +2685,16 @@ public class Start
                     // Get recipe ID from LockedUser (fetched from app_id_to_user_id during lock acquisition)
                     String recipeId = GeneralQueries.getRecipeIdForUser_Transaction(lockedUser);
 
+                    MigrationMode mode = Config.getConfig(Start.this).getMigrationMode();
+
+                    if (!mode.writesToOldTables()) {
+                        // MIGRATED mode: only new tables exist, use their delete result directly
+                        AccountInfoQueries.removeAccountInfoReservationForPrimaryUserWhileRemovingTenant_Transaction(this, sqlCon, tenantIdentifier, lockedUser);
+                        boolean removed = AccountInfoQueries.removeAccountInfoForRecipeUserWhileRemovingTenant_Transaction(this, sqlCon, tenantIdentifier, lockedUser);
+                        sqlCon.commit();
+                        return removed;
+                    }
+
                     boolean removed;
                     if (recipeId.equals("emailpassword")) {
                         removed = EmailPasswordQueries.removeUserIdFromTenant_Transaction(this, sqlCon,
@@ -2692,7 +2709,6 @@ public class Start
                         throw new IllegalStateException("Should never come here!");
                     }
 
-                    MigrationMode mode = Config.getConfig(Start.this).getMigrationMode();
                     if (mode.writesToNewTables()) {
                         AccountInfoQueries.removeAccountInfoReservationForPrimaryUserWhileRemovingTenant_Transaction(this, sqlCon, tenantIdentifier, lockedUser);
                         AccountInfoQueries.removeAccountInfoForRecipeUserWhileRemovingTenant_Transaction(this, sqlCon, tenantIdentifier, lockedUser);
@@ -4260,7 +4276,7 @@ public class Start
     }
 
     @Override
-    public void addTenantIdToRecipeUser_Transaction(
+    public boolean addTenantIdToRecipeUser_Transaction(
             TenantIdentifier tenantIdentifier,
             TransactionConnection con,
             LockedUser user)
@@ -4268,10 +4284,10 @@ public class Start
             DuplicateThirdPartyUserException, DuplicatePhoneNumberException {
         MigrationMode mode = Config.getConfig(this).getMigrationMode();
         if (!mode.writesToNewTables()) {
-            return;
+            return false;
         }
         Connection sqlCon = (Connection) con.getConnection();
-        AccountInfoQueries.addTenantIdToRecipeUser_Transaction(
+        return AccountInfoQueries.addTenantIdToRecipeUser_Transaction(
                 this, sqlCon, tenantIdentifier, user);
     }
 

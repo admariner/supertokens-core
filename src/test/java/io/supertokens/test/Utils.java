@@ -150,21 +150,16 @@ public abstract class Utils extends Mockito {
             // Update the config to use the test-specific database (if one was created)
             if (testDbName != null) {
                 setValueInConfig("postgresql_database_name", "\"" + testDbName + "\"");
+                setValueInConfig("postgresql_user", "\"" + DatabaseTestHelper.getUser() + "\"");
+                setValueInConfig("postgresql_password", "\"" + DatabaseTestHelper.getPassword() + "\"");
+                setValueInConfig("migration_mode", "MIGRATED");
 
-                // Also set the PostgreSQL host and port from environment variables
-                // This ensures the core connects to the correct PostgreSQL instance
-                String pgHost = System.getenv("TEST_PG_HOST");
-                if (pgHost == null || pgHost.isEmpty()) {
-                    pgHost = System.getProperty("TEST_PG_HOST");
-                }
+                String pgHost = DatabaseTestHelper.getHost();
                 if (pgHost != null && !pgHost.isEmpty()) {
                     setValueInConfig("postgresql_host", "\"" + pgHost + "\"");
                 }
 
-                String pgPort = System.getenv("TEST_PG_PORT");
-                if (pgPort == null || pgPort.isEmpty()) {
-                    pgPort = System.getProperty("TEST_PG_PORT");
-                }
+                String pgPort = DatabaseTestHelper.getPort();
                 if (pgPort != null && !pgPort.isEmpty()) {
                     setValueInConfig("postgresql_port", pgPort);
                 }
