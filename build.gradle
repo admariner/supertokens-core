@@ -129,7 +129,10 @@ dependencies {
 
     // Pulls in PostgreSQLTestDatabaseHelper via ServiceLoader so that core tests can create
     // per-worker databases without importing org.postgresql directly into supertokens-core.
-    testImplementation(testFixtures(project(':supertokens-postgresql-plugin')))
+    // findProject() returns null (instead of throwing) when the plugin isn't checked out (e.g. sqlite CI job).
+    if (findProject(':supertokens-postgresql-plugin') != null) {
+        testImplementation(testFixtures(project(':supertokens-postgresql-plugin')))
+    }
 }
 application {
     mainClass.set("io.supertokens.Main")
