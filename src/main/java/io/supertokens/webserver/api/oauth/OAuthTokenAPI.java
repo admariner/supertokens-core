@@ -47,6 +47,7 @@ import io.supertokens.session.Session;
 import io.supertokens.session.jwt.JWT.JWTException;
 import io.supertokens.storageLayer.StorageLayer;
 import io.supertokens.useridmapping.UserIdType;
+import io.supertokens.output.Logging;
 import io.supertokens.utils.Utils;
 import io.supertokens.webserver.InputParser;
 import io.supertokens.webserver.WebserverAPI;
@@ -351,6 +352,12 @@ public class OAuthTokenAPI extends WebserverAPI {
 
         String lockKey = appIdentifier.getAppId() + ":" + externalRefreshToken;
         ReentrantLock lock = REFRESH_LOCKS.computeIfAbsent(lockKey, k -> new ReentrantLock());
+        boolean contended = lock.isLocked();
+        if (contended) {
+            Logging.debug(main, appIdentifier.getAsPublicTenantIdentifier(),
+                    "OAuth non-rotating refresh: lock contended for token ...'"
+                            + tokenSuffix(externalRefreshToken) + "' — queuing");
+        }
         lock.lock();
         try {
             if (storage instanceof OAuthSQLStorage) {
@@ -404,6 +411,11 @@ public class OAuthTokenAPI extends WebserverAPI {
                             refreshTokenPayload, externalRefreshToken, oauthClient.clientId);
 
                     if (!refreshTokenPayload.get("active").getAsBoolean()) {
+                        String gidForLog = refreshTokenPayload.has("gid")
+                                ? refreshTokenPayload.get("gid").getAsString() : "?";
+                        Logging.warn(main, appIdentifier.getAsPublicTenantIdentifier(),
+                                "OAuth non-rotating refresh: token_inactive — ext=...'"
+                                        + tokenSuffix(externalRefreshToken) + "' gid=" + gidForLog);
                         OAuthProxyHelper.handleOAuthAPIException(resp, new OAuthAPIException(
                                 "token_inactive",
                                 "Token is inactive because it is malformed, expired or otherwise invalid. Token validation failed.",
@@ -417,7 +429,12 @@ public class OAuthTokenAPI extends WebserverAPI {
                             main, req, resp, appIdentifier, sqlStorage,
                             oauthClient.clientId, "/oauth2/token", false, false,
                             formFields, headers);
-                    if (exchangeResp == null) return null; // already responded; auto-rollback
+                    if (exchangeResp == null) {
+                        Logging.warn(main, appIdentifier.getAsPublicTenantIdentifier(),
+                                "OAuth non-rotating refresh: Hydra exchange failed (null response) — ext=...'"
+                                        + tokenSuffix(externalRefreshToken) + "'");
+                        return null; // already responded; auto-rollback
+                    }
 
                     // ── 4. Transform tokens ────────────────────────────────────────
                     exchangeResp.jsonResponse = OAuth.transformTokens(main, appIdentifier, sqlStorage,
@@ -454,6 +471,7 @@ public class OAuthTokenAPI extends WebserverAPI {
                         Map<String, String> newIntrospectFields = new HashMap<>();
                         newIntrospectFields.put("token", newInternalToken);
                         long refreshTokenExp = refreshTokenPayload.get("exp").getAsLong(); // fallback
+                        boolean introspectSucceeded = false;
                         for (int attempt = 0; attempt < 3; attempt++) {
                             try {
                                 if (attempt > 0) {
@@ -466,14 +484,24 @@ public class OAuthTokenAPI extends WebserverAPI {
                                                 newIntrospectFields, new HashMap<>());
                                 refreshTokenExp = newIntrospectResp.jsonResponse
                                         .getAsJsonObject().get("exp").getAsLong();
+                                introspectSucceeded = true;
                                 break;
                             } catch (OAuthAPIException e) {
-                                // Hydra transiently rejected the newly issued token —
-                                // retry, or fall back to the pre-exchange expiry.
+                                Logging.warn(main, appIdentifier.getAsPublicTenantIdentifier(),
+                                        "OAuth non-rotating refresh: post-exchange introspect attempt "
+                                                + (attempt + 1) + "/3 failed — " + e.error
+                                                + " — ext=...'" + tokenSuffix(externalRefreshToken) + "'");
                             } catch (InterruptedException ie) {
                                 Thread.currentThread().interrupt();
                                 break;
                             }
+                        }
+                        if (!introspectSucceeded) {
+                            Logging.warn(main, appIdentifier.getAsPublicTenantIdentifier(),
+                                    "OAuth non-rotating refresh: post-exchange introspect exhausted all retries,"
+                                            + " falling back to pre-exchange expiry="
+                                            + refreshTokenExp
+                                            + " — ext=...'" + tokenSuffix(externalRefreshToken) + "'");
                         }
 
                         sqlStorage.updateOAuthSessionInternal_Transaction(appIdentifier, con, gid,
@@ -508,5 +536,10 @@ public class OAuthTokenAPI extends WebserverAPI {
         if (finalResponse[0] != null) {
             super.sendJsonResponse(200, finalResponse[0], resp);
         }
+    }
+
+    private static String tokenSuffix(String token) {
+        if (token == null || token.length() <= 8) return token;
+        return token.substring(token.length() - 8);
     }
 }
