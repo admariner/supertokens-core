@@ -447,31 +447,35 @@ public class OAuthTokenAPI extends WebserverAPI {
                         String newInternalToken = exchangeResp.jsonResponse.getAsJsonObject()
                                 .get("refresh_token").getAsString();
 
+                        // Introspect the new Hydra token to get its expiry.
+                        // Use doOAuthProxyFormPOST directly (not proxyFormPOST) so we can
+                        // retry on transient OAuthAPIException without proxyFormPOST having
+                        // already written an error HTTP response before returning null.
                         Map<String, String> newIntrospectFields = new HashMap<>();
                         newIntrospectFields.put("token", newInternalToken);
-                        HttpRequestForOAuthProvider.Response newIntrospectResp = OAuthProxyHelper.proxyFormPOST(
-                                main, req, resp, appIdentifier, sqlStorage,
-                                null, "/admin/oauth2/introspect", true, false,
-                                newIntrospectFields, new HashMap<>());
-                        long refreshTokenExp;
-                        if (newIntrospectResp == null) {
-                            // Post-exchange introspect failed transiently (Hydra unavailable).
-                            // The old internal token was already consumed by Hydra; we cannot
-                            // roll back that operation. Commit with the old token's expiry as a
-                            // fallback so the new mapping is persisted and the session is not
-                            // permanently broken.
-                            refreshTokenExp = refreshTokenPayload.get("exp").getAsLong();
-                            sqlStorage.updateOAuthSessionInternal_Transaction(appIdentifier, con, gid,
-                                    newInternalToken, sessionHandle, jti, refreshTokenExp);
-                            sqlStorage.commitTransaction(con);
-                            // proxyFormPOST already wrote an error to resp; leave finalResponse null
-                            // so we don't double-respond. The client can retry safely.
-                            return null;
+                        long refreshTokenExp = refreshTokenPayload.get("exp").getAsLong(); // fallback
+                        for (int attempt = 0; attempt < 3; attempt++) {
+                            try {
+                                if (attempt > 0) {
+                                    Thread.sleep(50L << attempt); // 100 ms, 200 ms
+                                }
+                                HttpRequestForOAuthProvider.Response newIntrospectResp =
+                                        OAuth.doOAuthProxyFormPOST(
+                                                main, appIdentifier, sqlStorage, null,
+                                                "/admin/oauth2/introspect", true, false,
+                                                newIntrospectFields, new HashMap<>());
+                                refreshTokenExp = newIntrospectResp.jsonResponse
+                                        .getAsJsonObject().get("exp").getAsLong();
+                                break;
+                            } catch (OAuthAPIException e) {
+                                // Hydra transiently rejected the newly issued token —
+                                // retry, or fall back to the pre-exchange expiry.
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                                break;
+                            }
                         }
-                        refreshTokenExp = newIntrospectResp.jsonResponse.getAsJsonObject()
-                                .get("exp").getAsLong();
 
-                        // UPDATE inside the same transaction — atomically replaces internal token
                         sqlStorage.updateOAuthSessionInternal_Transaction(appIdentifier, con, gid,
                                 newInternalToken, sessionHandle, jti, refreshTokenExp);
                     }
@@ -485,7 +489,8 @@ public class OAuthTokenAPI extends WebserverAPI {
                 } catch (IOException | TenantOrAppNotFoundException | FeatureNotEnabledException
                          | InvalidConfigException | InvalidKeyException | NoSuchAlgorithmException
                          | InvalidKeySpecException | JWTCreationException | JWTException
-                         | UnsupportedJWTSigningAlgorithmException | ServletException e) {
+                         | UnsupportedJWTSigningAlgorithmException | OAuthClientNotFoundException
+                         | ServletException e) {
                     throw new StorageTransactionLogicException(e);
                 }
                 return null;
