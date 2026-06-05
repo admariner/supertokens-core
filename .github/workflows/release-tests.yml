@@ -200,6 +200,13 @@ jobs:
           for db in supertokens $(seq -f 'st%.0f' 0 50); do
             psql -d root -c "CREATE DATABASE \"$db\";" 2>/dev/null || true
           done
+          # Also pre-create worker-specific databases for parallel test workers.
+          # maxParallelForks = availableProcessors(); create for up to 8 workers to be safe.
+          for w in $(seq 1 8); do
+            for n in $(seq 0 50); do
+              psql -d root -c "CREATE DATABASE \"st${n}_w${w}\";" 2>/dev/null || true
+            done
+          done
 
       - name: Setup test environment
         run: cd supertokens-root && ./utils/setupTestEnv --local

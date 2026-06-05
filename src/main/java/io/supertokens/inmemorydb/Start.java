@@ -2604,17 +2604,15 @@ public class Start
             String recipeId = GeneralQueries.getRecipeIdForUser_Transaction(lockedUser);
 
             MigrationMode mode = Config.getConfig(this).getMigrationMode();
-            if (!mode.writesToOldTables()) {
-                // MIGRATED mode: only new tables exist; the return value comes from the new-table insert.
-                boolean added = AccountInfoQueries.addTenantIdToRecipeUser_Transaction(this, sqlCon, tenantIdentifier, lockedUser);
-                sqlCon.commit();
-                return added;
-            }
 
+            // Track whether the user was already associated in new tables (for return-value computation).
+            boolean addedInNewTables = false;
             if (mode.writesToNewTables()) {
-                AccountInfoQueries.addTenantIdToRecipeUser_Transaction(this, sqlCon, tenantIdentifier, lockedUser);
+                addedInNewTables = AccountInfoQueries.addTenantIdToRecipeUser_Transaction(this, sqlCon, tenantIdentifier, lockedUser);
             }
 
+            // Always call recipe-specific queries so that a deleted user (ghost entry in app_id_to_user_id
+            // with no recipe-table rows) throws UnknownUserIdException — mirrors PostgreSQL behaviour.
             boolean added;
             if (recipeId.equals("emailpassword")) {
                 added = EmailPasswordQueries.addUserIdToTenant_Transaction(this, sqlCon, tenantIdentifier,
@@ -2626,6 +2624,11 @@ public class Start
                         userId);
             } else {
                 throw new IllegalStateException("Should never come here!");
+            }
+
+            if (mode.writesToNewTables() && !mode.writesToOldTables()) {
+                // In MIGRATED mode the new-table insert is authoritative for the return value.
+                added = addedInNewTables;
             }
 
             sqlCon.commit();

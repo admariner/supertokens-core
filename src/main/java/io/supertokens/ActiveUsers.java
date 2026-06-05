@@ -68,7 +68,7 @@ public class ActiveUsers {
             throws TenantOrAppNotFoundException {
         long now = System.currentTimeMillis();
         String key = cacheKey(appIdentifier, userId);
-        if (isRecentlyActive(key, now)) {
+        if (!Main.isTesting && isRecentlyActive(key, now)) {
             return;
         }
         Storage storage = StorageLayer.getStorage(appIdentifier.getAsPublicTenantIdentifier(), main);
