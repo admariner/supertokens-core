@@ -154,6 +154,9 @@ public abstract class Utils extends Mockito {
                 setValueInConfig("postgresql_user", "\"" + DatabaseTestHelper.getUser() + "\"");
                 setValueInConfig("postgresql_password", "\"" + DatabaseTestHelper.getPassword() + "\"");
                 setValueInConfig("migration_mode", "MIGRATED");
+                // Limit pool size per test DB to avoid exhausting PostgreSQL's max_connections (default 100)
+                // across parallel workers and multitenancy tests that each open their own HikariCP pool.
+                setValueInConfig("postgresql_connection_pool_size", "5");
 
                 String pgHost = DatabaseTestHelper.getHost();
                 if (pgHost != null && !pgHost.isEmpty()) {
