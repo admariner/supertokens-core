@@ -132,7 +132,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:13
+        image: postgres:17
         env:
           POSTGRES_USER: root
           POSTGRES_PASSWORD: root
@@ -140,6 +140,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
+          --name postgres
           --health-cmd "pg_isready -U root"
           --health-interval 5s
           --health-timeout 3s
@@ -188,6 +189,20 @@ jobs:
           ${{ matrix.plugin }}-plugin,master
           EOF
           ./loadModules
+
+      - name: Configure PostgreSQL
+        if: matrix.plugin == 'postgresql'
+        env:
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: root
+          PGPASSWORD: root
+        run: |
+          # GHA service containers don't support passing server args in YAML, so we
+          # apply max_connections via ALTER SYSTEM and restart the container.
+          psql -d root -c "ALTER SYSTEM SET max_connections = 1000;"
+          docker restart postgres
+          until pg_isready -h localhost -U root; do sleep 1; done
 
       - name: Create PostgreSQL test databases
         if: matrix.plugin == 'postgresql'
