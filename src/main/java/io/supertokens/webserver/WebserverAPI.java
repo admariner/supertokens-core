@@ -27,7 +27,7 @@ import io.supertokens.multitenancy.MultitenancyHelper;
 import io.supertokens.multitenancy.exception.BadPermissionException;
 import io.supertokens.output.Logging;
 import io.supertokens.pluginInterface.Storage;
-import io.supertokens.pluginInterface.emailpassword.exceptions.UnknownUserIdException;
+import io.supertokens.pluginInterface.authRecipe.exceptions.UnknownUserIdException;
 import io.supertokens.pluginInterface.exceptions.StorageQueryException;
 import io.supertokens.pluginInterface.multitenancy.AppIdentifier;
 import io.supertokens.pluginInterface.multitenancy.TenantIdentifier;
@@ -372,6 +372,17 @@ public abstract class WebserverAPI extends HttpServlet {
         AppIdentifier appIdentifier = getAppIdentifierWithoutVerifying(req);
         StorageLayer.getStorage(appIdentifier.getAsPublicTenantIdentifier(), main); // ensure the app exists
         return appIdentifier;
+    }
+
+    /**
+     * Returns true if the given AppIdentifier refers to the root CUD — empty
+     * connectionUriDomain and the default app. APIs that aggregate state across
+     * all CUDs use this to distinguish "give me the cluster-wide view" from
+     * "give me just my CUD" requests.
+     */
+    protected static boolean isRootCUD(AppIdentifier appIdentifier) {
+        return appIdentifier.getConnectionUriDomain().isEmpty()
+                && appIdentifier.getAppId().equals(AppIdentifier.DEFAULT_APP_ID);
     }
 
     protected Storage getTenantStorage(HttpServletRequest req)

@@ -106,6 +106,7 @@ public class BulkImportFlowTest {
         // Note2: the successfully processed users get deleted from the bulk_import_users table
         {
             long count = NUMBER_OF_USERS_TO_UPLOAD;
+            long pollTimeoutMs = 300_000; // 5 minutes
             while(true) {
                 try {
                     JsonObject response = loadBulkImportUsersCountWithStatus(main, null);
@@ -129,6 +130,9 @@ public class BulkImportFlowTest {
                     } else {
                         throw e;
                     }
+                }
+                if (System.currentTimeMillis() - processingStarted > pollTimeoutMs) {
+                    fail("Bulk import processing timed out after " + (pollTimeoutMs / 1000) + "s with " + count + " users remaining");
                 }
                 Thread.sleep(1000);
             }
@@ -158,14 +162,18 @@ public class BulkImportFlowTest {
         Utils.setValueInConfig("bulk_migration_batch_size", "1000");
         Utils.setValueInConfig("log_level", "DEBUG");
 
-        TestingProcessManager.TestingProcess process = TestingProcessManager.startIsolatedProcess(args, true);
+        // Start with startProcess=false to avoid race condition with feature flag setup
+        TestingProcessManager.TestingProcess process = TestingProcessManager.startIsolatedProcess(args, false);
         Main main = process.getProcess();
+        // Set feature flags BEFORE starting the process to avoid race condition
         setFeatureFlags(main, new EE_FEATURES[] {
                 EE_FEATURES.ACCOUNT_LINKING, EE_FEATURES.MULTI_TENANCY, EE_FEATURES.MFA});
         // We are setting a non-zero initial wait for tests to avoid race condition with the beforeTest process that deletes data in the storage layer
-        CronTaskTest.getInstance(main).setInitialWaitTimeInSeconds(ProcessBulkImportUsers.RESOURCE_KEY, 5);
-        CronTaskTest.getInstance(main).setIntervalInSeconds(ProcessBulkImportUsers.RESOURCE_KEY, 60);
+        CronTaskTest.getInstance(main).setInitialWaitTimeInSeconds(ProcessBulkImportUsers.RESOURCE_KEY, 1);
+        CronTaskTest.getInstance(main).setIntervalInSeconds(ProcessBulkImportUsers.RESOURCE_KEY, 5);
 
+        // Now start the process after feature flags are set
+        process.startProcess();
         assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STARTED));
 
         Cronjobs.addCronjob(main, (ProcessBulkImportUsers) main.getResourceDistributor().getResource(new TenantIdentifier(null, null, null), ProcessBulkImportUsers.RESOURCE_KEY));
@@ -193,57 +201,42 @@ public class BulkImportFlowTest {
         }
 
         long processingStarted = System.currentTimeMillis();
-        boolean restartHappened = false;
-        // wait for the cron job to process them
-        // periodically check the remaining unprocessed users
-        // Note1: the cronjob starts the processing automatically
-        // Note2: the successfully processed users get deleted from the bulk_import_users table
+
+        // Phase 1: Let processing run for 10s, then kill and restart with different config
+        Thread.sleep(10_000);
+        process.kill(false);
+        Utils.setValueInConfig("bulk_migration_parallelism", "14");
+        Utils.setValueInConfig("bulk_migration_batch_size", "4000");
+        process = TestingProcessManager.startIsolatedProcess(args, false);
+        main = process.getProcess();
+        setFeatureFlags(main, new EE_FEATURES[] {
+                EE_FEATURES.ACCOUNT_LINKING, EE_FEATURES.MULTI_TENANCY, EE_FEATURES.MFA});
+        CronTaskTest.getInstance(main).setInitialWaitTimeInSeconds(ProcessBulkImportUsers.RESOURCE_KEY, 1);
+        CronTaskTest.getInstance(main).setIntervalInSeconds(ProcessBulkImportUsers.RESOURCE_KEY, 5);
+        process.startProcess();
+        assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STARTED));
+        Cronjobs.addCronjob(main, (ProcessBulkImportUsers) main.getResourceDistributor().getResource(new TenantIdentifier(null, null, null), ProcessBulkImportUsers.RESOURCE_KEY));
+
+        // Phase 2: Wait for completion via ProcessState event on the new process
+        // Note: if the first process already finished all users before it was killed,
+        // the second process will never fire BULK_IMPORT_COMPLETE (requires usersProcessed > 0).
+        // So we also check if all users are already processed by polling counts.
         {
-            long count = NUMBER_OF_USERS_TO_UPLOAD;
-            while(true) {
-                try {
-                    JsonObject response = loadBulkImportUsersCountWithStatus(main, null);
-                    assertEquals("OK", response.get("status").getAsString());
-                    count = response.get("count").getAsLong();
-                    int newUsersNumber = loadBulkImportUsersCountWithStatus(main,
-                            BulkImportStorage.BULK_IMPORT_USER_STATUS.NEW).get("count").getAsInt();
-                    int processingUsersNumber = loadBulkImportUsersCountWithStatus(main,
-                            BulkImportStorage.BULK_IMPORT_USER_STATUS.PROCESSING).get("count").getAsInt();
-                    int failedUsersNumber = loadBulkImportUsersCountWithStatus(main,
-                            BulkImportStorage.BULK_IMPORT_USER_STATUS.FAILED).get("count").getAsInt();
-                    count = newUsersNumber + processingUsersNumber;
-                    System.out.println("Remaining users: " + count);
-
-                    if (count == 0) {
-                        break;
-                    }
-                    if((System.currentTimeMillis() - processingStarted > 10000) && !restartHappened) {
-                        System.out.println("Killing core");
-                        process.kill(false);
-                        Utils.setValueInConfig("bulk_migration_parallelism", "14");
-                        Utils.setValueInConfig("bulk_migration_batch_size", "4000");
-                        System.out.println("Started new core");
-                        process = TestingProcessManager.startIsolatedProcess(args, true);
-                        main = process.getProcess();
-                        setFeatureFlags(main, new EE_FEATURES[] {
-                                EE_FEATURES.ACCOUNT_LINKING, EE_FEATURES.MULTI_TENANCY, EE_FEATURES.MFA});
-                        // We are setting a non-zero initial wait for tests to avoid race condition with the beforeTest process that deletes data in the storage layer
-                        CronTaskTest.getInstance(main).setInitialWaitTimeInSeconds(ProcessBulkImportUsers.RESOURCE_KEY, 5);
-                        CronTaskTest.getInstance(main).setIntervalInSeconds(ProcessBulkImportUsers.RESOURCE_KEY, 60);
-
-                        assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STARTED));
-
-                        Cronjobs.addCronjob(main, (ProcessBulkImportUsers) main.getResourceDistributor().getResource(new TenantIdentifier(null, null, null), ProcessBulkImportUsers.RESOURCE_KEY));
-                        restartHappened = true;
-                    }
-                } catch (Exception e) {
-                    if(e instanceof SocketTimeoutException)  {
-                        //ignore
-                    } else {
-                        throw e;
-                    }
+            long deadline = System.currentTimeMillis() + 300_000; // 5 min timeout
+            while (System.currentTimeMillis() < deadline) {
+                if (ProcessState.getInstance(main).getLastEventByName(
+                        ProcessState.PROCESS_STATE.BULK_IMPORT_COMPLETE) != null) {
+                    break;
                 }
-                Thread.sleep(1000);
+                // Also check if processing is already done (first process may have completed everything)
+                int newCount = loadBulkImportUsersCountWithStatus(main,
+                        BulkImportStorage.BULK_IMPORT_USER_STATUS.NEW).get("count").getAsInt();
+                int processingCount = loadBulkImportUsersCountWithStatus(main,
+                        BulkImportStorage.BULK_IMPORT_USER_STATUS.PROCESSING).get("count").getAsInt();
+                if (newCount == 0 && processingCount == 0) {
+                    break;
+                }
+                Thread.sleep(500);
             }
         }
 
@@ -288,6 +281,8 @@ public class BulkImportFlowTest {
 
         long count = NUMBER_OF_USERS_TO_UPLOAD;
         int failedUsersNumber = 0;
+        long pollStart = System.currentTimeMillis();
+        long pollTimeoutMs = 120_000; // 2 minutes
         while (true) {
             response = loadBulkImportUsersCountWithStatus(main, null);
             assertEquals("OK", response.get("status").getAsString());
@@ -302,6 +297,9 @@ public class BulkImportFlowTest {
             count = newUsersNumber + processingUsersNumber;
             if(count == 0) {
                 break;
+            }
+            if (System.currentTimeMillis() - pollStart > pollTimeoutMs) {
+                fail("Bulk import processing timed out after " + (pollTimeoutMs / 1000) + "s with " + count + " users remaining");
             }
             Thread.sleep(5000); // 5 seconds
         }
@@ -350,6 +348,8 @@ public class BulkImportFlowTest {
 
         long count = NUMBER_OF_USERS_TO_UPLOAD;
         int failedUsersNumber = 0;
+        long pollStart = System.currentTimeMillis();
+        long pollTimeoutMs = 120_000; // 2 minutes
         while (true) {
             response = loadBulkImportUsersCountWithStatus(main, null);
             assertEquals("OK", response.get("status").getAsString());
@@ -364,6 +364,9 @@ public class BulkImportFlowTest {
             count = newUsersNumber + processingUsersNumber;
             if(count == 0) {
                 break;
+            }
+            if (System.currentTimeMillis() - pollStart > pollTimeoutMs) {
+                fail("Bulk import processing timed out after " + (pollTimeoutMs / 1000) + "s with " + count + " users remaining");
             }
             Thread.sleep(5000); // 5 seconds
         }
@@ -382,7 +385,10 @@ public class BulkImportFlowTest {
 
         for(JsonElement userJson : failedUsersLs.get("users").getAsJsonArray()) {
             String errorMessage = userJson.getAsJsonObject().get("errorMessage").getAsString();
-            assertTrue(errorMessage.startsWith("E003:"));
+            // E027 = conflict detected at reservation stage (new tables)
+            // E003 = duplicate email detected at signUp stage (legacy mode without reservation tables)
+            assertTrue("Expected E027 or E003 but got: " + errorMessage,
+                    errorMessage.startsWith("E027:") || errorMessage.startsWith("E003:"));
         }
 
     }
@@ -518,6 +524,8 @@ public class BulkImportFlowTest {
 
         long count = NUMBER_OF_USERS_TO_UPLOAD;
         int failedUsersNumber = 0;
+        long pollStart = System.currentTimeMillis();
+        long pollTimeoutMs = 120_000; // 2 minutes
         while (true) {
             response = loadBulkImportUsersCountWithStatus(main, null);
             assertEquals("OK", response.get("status").getAsString());
@@ -530,6 +538,9 @@ public class BulkImportFlowTest {
             if(count == 0) {
                 break;
             }
+            if (System.currentTimeMillis() - pollStart > pollTimeoutMs) {
+                fail("Bulk import processing timed out after " + (pollTimeoutMs / 1000) + "s with " + count + " users remaining");
+            }
             Thread.sleep(5000);
         }
 
@@ -540,6 +551,9 @@ public class BulkImportFlowTest {
         // after processing finished, make sure every user got processed correctly
         int failedImportedUsersNumber = loadBulkImportUsersCountWithStatus(main,
                 BulkImportStorage.BULK_IMPORT_USER_STATUS.FAILED).get("count").getAsInt();
+        JsonObject failedUsers = loadBulkImportUsersWithStatus(main,
+                BulkImportStorage.BULK_IMPORT_USER_STATUS.FAILED);
+        System.out.println(failedUsers);
         int usersInCore = loadUsersCount(main).get("count").getAsInt();
         assertEquals(NUMBER_OF_USERS_TO_UPLOAD + 1, usersInCore + failedImportedUsersNumber);
         assertEquals(1, failedImportedUsersNumber);
@@ -547,7 +561,10 @@ public class BulkImportFlowTest {
 
         for(JsonElement userJson : failedUsersLs.get("users").getAsJsonArray()) {
             String errorMessage = userJson.getAsJsonObject().get("errorMessage").getAsString();
-            assertTrue(errorMessage.startsWith("E003:"));
+            // E027 = conflict detected at reservation stage (new tables)
+            // E003 = duplicate email detected at signUp stage (legacy mode without reservation tables)
+            assertTrue("Expected E027 or E003 but got: " + errorMessage,
+                    errorMessage.startsWith("E027:") || errorMessage.startsWith("E003:"));
         }
 
     }
@@ -578,6 +595,8 @@ public class BulkImportFlowTest {
         // Note2: the successfully processed users get deleted from the bulk_import_users table
 
         long count = NUMBER_OF_USERS_TO_UPLOAD;
+        long pollStart = System.currentTimeMillis();
+        long pollTimeoutMs = 120_000; // 2 minutes
         while (true) {
             response = loadBulkImportUsersCountWithStatus(main, null);
             assertEquals("OK", response.get("status").getAsString());
@@ -589,6 +608,9 @@ public class BulkImportFlowTest {
             count = newUsersNumber + processingUsersNumber;
             if(count == 0) {
                 break;
+            }
+            if (System.currentTimeMillis() - pollStart > pollTimeoutMs) {
+                fail("Bulk import processing timed out after " + (pollTimeoutMs / 1000) + "s with " + count + " users remaining");
             }
             Thread.sleep(5000); // 5 seconds
         }
@@ -603,7 +625,7 @@ public class BulkImportFlowTest {
 
     @Test
     public void testFirstLazyImportAfterBulkImport() throws Exception {
-        Main main = startCronProcess("14", 10);
+        Main main = startCronProcess("14", 1);
 
 
         int NUMBER_OF_USERS_TO_UPLOAD = 100;
@@ -633,26 +655,27 @@ public class BulkImportFlowTest {
 
         // bulk import all of the users
         {
+            // Clear stale BULK_IMPORT_COMPLETE events that fired before upload
+            // (the cron sees 0 NEW + 0 PROCESSING users on startup and fires the event)
+            ProcessState.getInstance(main).clear();
             JsonObject bulkUploadResponse = uploadBulkImportUsersJson(main, allUsersJson);
             assertEquals("OK", bulkUploadResponse.get("status").getAsString());
         }
 
-        // wait for the cron job to process them
-        // periodically check the remaining unprocessed users
-        // Note1: the cronjob starts the processing automatically
-        // Note2: the successfully processed users get deleted from the bulk_import_users table
+        // Wait for the bulk import cron to finish processing all users.
+        // The cron fires BULK_IMPORT_COMPLETE when NEW+PROCESSING count reaches 0.
         {
-            long count = NUMBER_OF_USERS_TO_UPLOAD;
-            while(count != 0) {
-                JsonObject response = loadBulkImportUsersCountWithStatus(main, null);
-                assertEquals("OK", response.get("status").getAsString());
-                int newUsersNumber = loadBulkImportUsersCountWithStatus(main, BulkImportStorage.BULK_IMPORT_USER_STATUS.NEW).get("count").getAsInt();
-                int processingUsersNumber = loadBulkImportUsersCountWithStatus(main, BulkImportStorage.BULK_IMPORT_USER_STATUS.PROCESSING).get("count").getAsInt();
-
-                count = newUsersNumber + processingUsersNumber;
-
-                Thread.sleep(60000); // one minute
+            long deadline = System.currentTimeMillis() + 120_000; // 2 min timeout
+            while (System.currentTimeMillis() < deadline) {
+                if (ProcessState.getInstance(main).getLastEventByName(
+                        ProcessState.PROCESS_STATE.BULK_IMPORT_COMPLETE) != null) {
+                    break;
+                }
+                Thread.sleep(100);
             }
+            assertNotNull("Bulk import did not complete within timeout",
+                    ProcessState.getInstance(main).getLastEventByName(
+                            ProcessState.PROCESS_STATE.BULK_IMPORT_COMPLETE));
         }
 
 
@@ -669,8 +692,10 @@ public class BulkImportFlowTest {
         JsonArray faileds = failedUsers.getAsJsonArray("users");
         for (JsonElement failedUser : faileds) {
             String errorMessage = failedUser.getAsJsonObject().get("errorMessage").getAsString();
-            assertTrue(errorMessage.startsWith("E003:") || errorMessage.startsWith("E005:")
-                    || errorMessage.startsWith("E006:") || errorMessage.startsWith("E007:")); // duplicate email, phone, etc errors
+            // E027 = conflict detected at reservation stage (new tables)
+            // E003 = duplicate email detected at signUp stage (legacy mode without reservation tables)
+            assertTrue("Expected E027 or E003 but got: " + errorMessage,
+                    errorMessage.startsWith("E027:") || errorMessage.startsWith("E003:"));
         }
 
     }
@@ -918,7 +943,7 @@ public class BulkImportFlowTest {
 
     @NotNull
     private Main startCronProcess(String parallelism) throws IOException, InterruptedException, TenantOrAppNotFoundException {
-        return startCronProcess(parallelism, 5 * 60);
+        return startCronProcess(parallelism, 10);
     }
 
 
@@ -930,15 +955,22 @@ public class BulkImportFlowTest {
         Utils.setValueInConfig("bulk_migration_parallelism", parallelism);
         //Utils.setValueInConfig("bulk_migration_batch_size", "1000");
         Utils.setValueInConfig("log_level", "DEBUG");
+        // Pool must exceed parallelism so polling API calls aren't starved by the worker threads
+        int parallelismInt = Integer.parseInt(parallelism);
+        Utils.setValueInConfig("postgresql_connection_pool_size", String.valueOf(Math.max(10, parallelismInt + 4)));
 
-        TestingProcessManager.TestingProcess process = TestingProcessManager.startIsolatedProcess(args, true);
+        // Start with startProcess=false to avoid race condition with feature flag setup
+        TestingProcessManager.TestingProcess process = TestingProcessManager.startIsolatedProcess(args, false);
         Main main = process.getProcess();
+        // Set feature flags BEFORE starting the process to avoid race condition
         setFeatureFlags(main, new EE_FEATURES[] {
                 EE_FEATURES.ACCOUNT_LINKING, EE_FEATURES.MULTI_TENANCY, EE_FEATURES.MFA});
         // We are setting a non-zero initial wait for tests to avoid race condition with the beforeTest process that deletes data in the storage layer
-        CronTaskTest.getInstance(main).setInitialWaitTimeInSeconds(ProcessBulkImportUsers.RESOURCE_KEY, 5);
+        CronTaskTest.getInstance(main).setInitialWaitTimeInSeconds(ProcessBulkImportUsers.RESOURCE_KEY, 1);
         CronTaskTest.getInstance(main).setIntervalInSeconds(ProcessBulkImportUsers.RESOURCE_KEY, intervalInSeconds);
 
+        // Now start the process after feature flags are set
+        process.startProcess();
         assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STARTED));
 
         Cronjobs.addCronjob(main, (ProcessBulkImportUsers) main.getResourceDistributor().getResource(new TenantIdentifier(null, null, null), ProcessBulkImportUsers.RESOURCE_KEY));

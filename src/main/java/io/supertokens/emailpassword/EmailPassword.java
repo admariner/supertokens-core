@@ -31,7 +31,7 @@ import io.supertokens.ResourceDistributor;
 import io.supertokens.authRecipe.AuthRecipe;
 import io.supertokens.config.Config;
 import io.supertokens.config.CoreConfig;
-import io.supertokens.emailpassword.exceptions.EmailChangeNotAllowedException;
+import io.supertokens.pluginInterface.authRecipe.exceptions.EmailChangeNotAllowedException;
 import io.supertokens.emailpassword.exceptions.ResetPasswordInvalidTokenException;
 import io.supertokens.emailpassword.exceptions.UnsupportedPasswordHashingFormatException;
 import io.supertokens.emailpassword.exceptions.WrongCredentialsException;
@@ -49,7 +49,7 @@ import io.supertokens.pluginInterface.emailpassword.PasswordResetTokenInfo;
 import io.supertokens.pluginInterface.emailpassword.exceptions.DuplicateEmailException;
 import io.supertokens.pluginInterface.emailpassword.exceptions.DuplicatePasswordResetTokenException;
 import io.supertokens.pluginInterface.emailpassword.exceptions.DuplicateUserIdException;
-import io.supertokens.pluginInterface.emailpassword.exceptions.UnknownUserIdException;
+import io.supertokens.pluginInterface.authRecipe.exceptions.UnknownUserIdException;
 import io.supertokens.pluginInterface.emailpassword.sqlStorage.EmailPasswordSQLStorage;
 import io.supertokens.pluginInterface.emailverification.sqlStorage.EmailVerificationSQLStorage;
 import io.supertokens.pluginInterface.exceptions.StorageQueryException;
@@ -58,6 +58,9 @@ import io.supertokens.pluginInterface.multitenancy.AppIdentifier;
 import io.supertokens.pluginInterface.multitenancy.TenantConfig;
 import io.supertokens.pluginInterface.multitenancy.TenantIdentifier;
 import io.supertokens.pluginInterface.multitenancy.exceptions.TenantOrAppNotFoundException;
+import io.supertokens.pluginInterface.useridmapping.LockedUser;
+import io.supertokens.pluginInterface.useridmapping.UserLockingStorage;
+import io.supertokens.pluginInterface.useridmapping.UserNotFoundForLockingException;
 import io.supertokens.storageLayer.StorageLayer;
 import io.supertokens.utils.Utils;
 import io.supertokens.webserver.WebserverAPI;
@@ -646,9 +649,18 @@ public class EmailPassword {
             EmailChangeNotAllowedException {
         EmailPasswordSQLStorage epStorage = StorageUtils.getEmailPasswordStorage(storage);
         AuthRecipeSQLStorage authRecipeStorage = StorageUtils.getAuthRecipeStorage(storage);
+        UserLockingStorage lockingStorage = (UserLockingStorage) storage;
         try {
             epStorage.startTransaction(transaction -> {
                 try {
+                    // Acquire lock on the user to prevent race conditions during email/password update
+                    LockedUser lockedUser;
+                    try {
+                        lockedUser = lockingStorage.lockUser(appIdentifier, transaction, userId);
+                    } catch (UserNotFoundForLockingException e) {
+                        throw new StorageTransactionLogicException(new UnknownUserIdException());
+                    }
+
                     AuthRecipeUserInfo user = authRecipeStorage.getPrimaryUserById_Transaction(appIdentifier,
                             transaction, userId);
 
@@ -667,30 +679,9 @@ public class EmailPassword {
                     }
 
                     if (email != null) {
-                        if (user.isPrimaryUser) {
-                            for (String tenantId : user.tenantIds) {
-                                AuthRecipeUserInfo[] existingUsersWithNewEmail =
-                                        authRecipeStorage.listPrimaryUsersByEmail_Transaction(
-                                                appIdentifier, transaction,
-                                                email);
-
-                                for (AuthRecipeUserInfo userWithSameEmail : existingUsersWithNewEmail) {
-                                    if (!userWithSameEmail.tenantIds.contains(tenantId)) {
-                                        continue;
-                                    }
-                                    if (userWithSameEmail.isPrimaryUser && !userWithSameEmail.getSupertokensUserId()
-                                            .equals(user.getSupertokensUserId())) {
-                                        throw new StorageTransactionLogicException(
-                                                new EmailChangeNotAllowedException());
-                                    }
-                                }
-                            }
-                        }
-
                         try {
-                            epStorage.updateUsersEmail_Transaction(appIdentifier, transaction,
-                                    userId, email);
-                        } catch (DuplicateEmailException e) {
+                            epStorage.updateUsersEmail_Transaction(appIdentifier, transaction, userId, email);
+                        } catch (DuplicateEmailException | EmailChangeNotAllowedException | UnknownUserIdException e) {
                             throw new StorageTransactionLogicException(e);
                         }
                     }

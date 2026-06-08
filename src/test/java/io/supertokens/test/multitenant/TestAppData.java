@@ -24,6 +24,8 @@ import java.util.Arrays;
 
 import javax.crypto.spec.SecretKeySpec;
 
+import io.supertokens.authRecipe.AuthRecipe;
+import io.supertokens.pluginInterface.emailpassword.exceptions.DuplicateEmailException;
 import org.apache.commons.codec.binary.Base32;
 import org.junit.AfterClass;
 import static org.junit.Assert.assertEquals;
@@ -67,7 +69,6 @@ import io.supertokens.pluginInterface.webauthn.AccountRecoveryTokenInfo;
 import io.supertokens.pluginInterface.webauthn.WebAuthNOptions;
 import io.supertokens.pluginInterface.webauthn.WebAuthNStorage;
 import io.supertokens.pluginInterface.webauthn.WebAuthNStoredCredential;
-import io.supertokens.pluginInterface.webauthn.exceptions.DuplicateUserEmailException;
 import io.supertokens.pluginInterface.webauthn.exceptions.DuplicateUserIdException;
 import io.supertokens.pluginInterface.webauthn.slqStorage.WebAuthNSQLStorage;
 import io.supertokens.session.Session;
@@ -130,7 +131,11 @@ public class TestAppData {
         }
 
         String[] tablesToIgnore = new String[]{"tenant_thirdparty_provider_clients", "tenant_thirdparty_providers",
-                "tenant_first_factors", "tenant_required_secondary_factors"};
+                "tenant_first_factors", "tenant_required_secondary_factors",
+                "recipe_user_tenants", "recipe_user_account_infos", "primary_user_tenants",
+                // Legacy tables that are not populated in MIGRATED mode.
+                "all_auth_recipe_users", "emailpassword_user_to_tenant", "thirdparty_user_to_tenant",
+                "passwordless_user_to_tenant", "webauthn_user_to_tenant"};
 
         TenantIdentifier app = new TenantIdentifier(null, "a1", null);
 
@@ -154,6 +159,7 @@ public class TestAppData {
                 "password");
         EmailPassword.generatePasswordResetTokenBeforeCdi4_0(app, appStorage, process.getProcess(),
                 epUser.getSupertokensUserId());
+        AuthRecipe.createPrimaryUser(process.getProcess(), app.toAppIdentifier(), appStorage, epUser.getSupertokensUserId());
 
         ThirdParty.SignInUpResponse tpUser = ThirdParty.signInUp(app, appStorage, process.getProcess(), "google",
                 "googleid", "test@example.com");
@@ -225,7 +231,7 @@ public class TestAppData {
                 ((WebAuthNSQLStorage) appStorage).signUpWithCredentialsRegister_Transaction(app, con, "userId", "test2@example.com", "example.com", credential);
             } catch (DuplicateUserIdException e) {
                 throw new RuntimeException(e);
-            } catch (DuplicateUserEmailException e) {
+            } catch (DuplicateEmailException e) {
                 throw new RuntimeException(e);
             }
             return null;

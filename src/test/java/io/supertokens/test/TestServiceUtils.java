@@ -17,10 +17,28 @@
 package io.supertokens.test;
 
 import java.io.IOException;
+import java.net.Socket;
 import java.util.Random;
 
 public class TestServiceUtils {
+    // Environment variable names for external service configuration
+    private static final String ENV_PG_HOST = "TEST_PG_HOST";
+    private static final String ENV_PG_PORT = "TEST_PG_PORT";
+    private static final String ENV_PG_DB = "TEST_PG_DB";
+    private static final String ENV_PG_USER = "TEST_PG_USER";
+    private static final String ENV_PG_PASSWORD = "TEST_PG_PASSWORD";
+    private static final String ENV_OAUTH_HOST = "TEST_OAUTH_HOST";
+    private static final String ENV_OAUTH_PUBLIC_PORT = "TEST_OAUTH_PUBLIC_PORT";
+    private static final String ENV_OAUTH_ADMIN_PORT = "TEST_OAUTH_ADMIN_PORT";
+
+    // Flags to track if we're using external services
+    private static boolean useExternalPostgres = false;
+    private static boolean useExternalOAuth = false;
+
     static {
+        // Check if external services are configured via environment variables
+        checkExternalServicesConfiguration();
+
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
                 killServices();
@@ -30,18 +48,157 @@ public class TestServiceUtils {
         }));
     }
 
+    /**
+     * Gets a configuration value from either environment variable or system property.
+     * Environment variables take precedence.
+     */
+    private static String getConfigValue(String name) {
+        String value = System.getenv(name);
+        if (value == null) {
+            value = System.getProperty(name);
+        }
+        return value;
+    }
+
+    private static void checkExternalServicesConfiguration() {
+        // System.out.println("[TestServiceUtils] Checking for external services configuration...");
+
+        // Check PostgreSQL external configuration
+        String pgHost = getConfigValue(ENV_PG_HOST);
+        String pgPort = getConfigValue(ENV_PG_PORT);
+
+        // System.out.println("[TestServiceUtils] " + ENV_PG_HOST + " = " + pgHost);
+        // System.out.println("[TestServiceUtils] " + ENV_PG_PORT + " = " + pgPort);
+
+        if (pgHost != null && pgPort != null) {
+            useExternalPostgres = true;
+            // System.out.println("[TestServiceUtils] External PostgreSQL configured: " + pgHost + ":" + pgPort);
+            // Set system properties for the PostgreSQL plugin
+            System.setProperty("ST_POSTGRESQL_PLUGIN_SERVER_HOST", pgHost);
+            System.setProperty("ST_POSTGRESQL_PLUGIN_SERVER_PORT", pgPort);
+        } else {
+            // System.out.println("[TestServiceUtils] External PostgreSQL NOT configured - will use Docker containers");
+        }
+
+        // Check OAuth external configuration
+        String oauthHost = getConfigValue(ENV_OAUTH_HOST);
+        String oauthPublicPort = getConfigValue(ENV_OAUTH_PUBLIC_PORT);
+        String oauthAdminPort = getConfigValue(ENV_OAUTH_ADMIN_PORT);
+
+        // System.out.println("[TestServiceUtils] " + ENV_OAUTH_HOST + " = " + oauthHost);
+        // System.out.println("[TestServiceUtils] " + ENV_OAUTH_PUBLIC_PORT + " = " + oauthPublicPort);
+        // System.out.println("[TestServiceUtils] " + ENV_OAUTH_ADMIN_PORT + " = " + oauthAdminPort);
+
+        if (oauthHost != null && oauthPublicPort != null && oauthAdminPort != null) {
+            useExternalOAuth = true;
+            // System.out.println("[TestServiceUtils] External OAuth configured: " + oauthHost + ":" + oauthPublicPort + "/" + oauthAdminPort);
+            // Set system properties for OAuth
+            System.setProperty("ST_OAUTH_PROVIDER_SERVICE_HOST", oauthHost);
+            System.setProperty("ST_OAUTH_PROVIDER_SERVICE_PORT", oauthPublicPort);
+            System.setProperty("ST_OAUTH_PROVIDER_ADMIN_PORT", oauthAdminPort);
+        } else {
+            // System.out.println("[TestServiceUtils] External OAuth NOT configured - will use Docker containers");
+        }
+    }
+
     public static void startServices() {
         try {
-            OAuthProviderService.startService();
-            PostgresqlService.startService();
+            if (useExternalOAuth) {
+                // System.out.println("[TestServiceUtils] Using external OAuth service, skipping container startup");
+                verifyOAuthConnectivity();
+            } else {
+                OAuthProviderService.startService();
+            }
+
+            if (useExternalPostgres) {
+                // System.out.println("[TestServiceUtils] Using external PostgreSQL service, skipping container startup");
+                verifyPostgresConnectivity();
+            } else {
+                PostgresqlService.startService();
+            }
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
     }
 
     public static void killServices() throws InterruptedException, IOException {
-        OAuthProviderService.killService();
-        PostgresqlService.killService();
+        if (!useExternalOAuth) {
+            OAuthProviderService.killService();
+        }
+        if (!useExternalPostgres) {
+            PostgresqlService.killService();
+        }
+    }
+
+    private static void verifyPostgresConnectivity() throws IOException {
+        String host = getConfigValue(ENV_PG_HOST);
+        int port = Integer.parseInt(getConfigValue(ENV_PG_PORT));
+        // System.out.println("[TestServiceUtils] Verifying PostgreSQL connectivity to " + host + ":" + port);
+
+        int maxAttempts = 30;
+        for (int i = 0; i < maxAttempts; i++) {
+            try (Socket socket = new Socket(host, port)) {
+                // System.out.println("[TestServiceUtils] Successfully connected to PostgreSQL at " + host + ":" + port);
+                return;
+            } catch (IOException e) {
+                if (i < maxAttempts - 1) {
+                    // System.out.println("[TestServiceUtils] PostgreSQL not ready, attempt " + (i + 1) + "/" + maxAttempts);
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException("Interrupted while waiting for PostgreSQL", ie);
+                    }
+                }
+            }
+        }
+        throw new IOException("Failed to connect to PostgreSQL at " + host + ":" + port + " after " + maxAttempts + " attempts");
+    }
+
+    private static void verifyOAuthConnectivity() throws IOException {
+        String host = getConfigValue(ENV_OAUTH_HOST);
+        int publicPort = Integer.parseInt(getConfigValue(ENV_OAUTH_PUBLIC_PORT));
+        int adminPort = Integer.parseInt(getConfigValue(ENV_OAUTH_ADMIN_PORT));
+        // System.out.println("[TestServiceUtils] Verifying OAuth connectivity to " + host + ":" + publicPort + " and " + host + ":" + adminPort);
+
+        int maxAttempts = 30;
+        // Verify public port
+        for (int i = 0; i < maxAttempts; i++) {
+            try (Socket socket = new Socket(host, publicPort)) {
+                // System.out.println("[TestServiceUtils] Successfully connected to OAuth public port at " + host + ":" + publicPort);
+                break;
+            } catch (IOException e) {
+                if (i == maxAttempts - 1) {
+                    throw new IOException("Failed to connect to OAuth public port at " + host + ":" + publicPort + " after " + maxAttempts + " attempts");
+                }
+                // System.out.println("[TestServiceUtils] OAuth public port not ready, attempt " + (i + 1) + "/" + maxAttempts);
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted while waiting for OAuth", ie);
+                }
+            }
+        }
+
+        // Verify admin port
+        for (int i = 0; i < maxAttempts; i++) {
+            try (Socket socket = new Socket(host, adminPort)) {
+                // System.out.println("[TestServiceUtils] Successfully connected to OAuth admin port at " + host + ":" + adminPort);
+                return;
+            } catch (IOException e) {
+                if (i == maxAttempts - 1) {
+                    throw new IOException("Failed to connect to OAuth admin port at " + host + ":" + adminPort + " after " + maxAttempts + " attempts");
+                }
+                // System.out.println("[TestServiceUtils] OAuth admin port not ready, attempt " + (i + 1) + "/" + maxAttempts);
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted while waiting for OAuth", ie);
+                }
+            }
+        }
     }
 
     private static class CmdHelper {
@@ -59,27 +216,56 @@ public class TestServiceUtils {
 
         private static final int PG_DB_PORT = new Random().nextInt(5000) + 15000;
 
+        private static final boolean PRINT_QUERY_STATS = "true".equalsIgnoreCase(System.getenv("ST_PRINT_QUERY_STATS"));
+
         static {
             System.setProperty("ST_POSTGRESQL_PLUGIN_SERVER_PORT", "" + PG_DB_PORT);
         }
 
         private static int runQuery(String query) throws InterruptedException, IOException {
-            System.out.println("Running query: " + query);
+            // System.out.println("Running query: " + query);
             return CmdHelper.runCommand(new String[] {
                     "docker", "exec", PG_SERVICE_NAME, "psql", "-U", "root", "postgres", "-c", query
             });
         }
 
+        private static void runQueryWithOutput(String query) throws InterruptedException, IOException {
+            ProcessBuilder processBuilder = new ProcessBuilder();
+            processBuilder.command(new String[] {
+                    "docker", "exec", PG_SERVICE_NAME, "psql", "-U", "root", "postgres", "-c", query
+            });
+            processBuilder.inheritIO();
+            Process process = processBuilder.start();
+            process.waitFor();
+        }
+
         public static void startService() throws IOException, InterruptedException {
             if (!System.getenv().containsKey("ST_PLUGIN_NAME") || System.getenv("ST_PLUGIN_NAME").equals("postgresql")) {
-                int exitCode = CmdHelper.runCommand(new String[] {
-                        "docker", "run", "--rm", "--name", PG_SERVICE_NAME,
-                        "-e", "POSTGRES_USER=root",
-                        "-e", "POSTGRES_PASSWORD=root",
-                        "-d", "-p", PG_DB_PORT + ":5432",
-                        "postgres",
-                        "-c", "max_connections=1000"
-                });
+                String[] dockerCmd;
+                if (PRINT_QUERY_STATS) {
+                    // Use Percona with pg_stat_statements enabled
+                    dockerCmd = new String[] {
+                            "docker", "run", "--rm", "--name", PG_SERVICE_NAME,
+                            "-e", "POSTGRES_USER=root",
+                            "-e", "POSTGRES_PASSWORD=root",
+                            "-d", "-p", PG_DB_PORT + ":5432",
+                            "percona/percona-distribution-postgresql:13",
+                            "-c", "max_connections=1000",
+                            "-c", "shared_preload_libraries=pg_stat_statements",
+                            "-c", "pg_stat_statements.track=all"
+                    };
+                } else {
+                    dockerCmd = new String[] {
+                            "docker", "run", "--rm", "--name", PG_SERVICE_NAME,
+                            "-e", "POSTGRES_USER=root",
+                            "-e", "POSTGRES_PASSWORD=root",
+                            "-d", "-p", PG_DB_PORT + ":5432",
+                            "percona/percona-distribution-postgresql:13",
+                            "-c", "max_connections=1000"
+                    };
+                }
+
+                int exitCode = CmdHelper.runCommand(dockerCmd);
 
                 if (exitCode != 0) {
                     throw new RuntimeException("Failed to start PostgreSQL service");
@@ -104,10 +290,42 @@ public class TestServiceUtils {
                         Thread.sleep(200);
                     }
                 }
+
+                if (PRINT_QUERY_STATS) {
+                    // Enable pg_stat_statements extension
+                    runQuery("CREATE EXTENSION IF NOT EXISTS pg_stat_statements;");
+                    // Reset stats at start
+                    runQuery("SELECT pg_stat_statements_reset();");
+                    System.out.println("[PostgreSQL] Query stats tracking enabled (ST_PRINT_QUERY_STATS=true)");
+                }
+            }
+        }
+
+        public static void printQueryStats() throws IOException, InterruptedException {
+            if (PRINT_QUERY_STATS) {
+                System.out.println("\n" + "=".repeat(80));
+                System.out.println("PostgreSQL Query Performance Stats (pg_stat_statements)");
+                System.out.println("=".repeat(80));
+                runQueryWithOutput(
+                    "SELECT " +
+                    "  calls, " +
+                    "  round(total_exec_time::numeric, 2) as total_ms, " +
+                    "  round(mean_exec_time::numeric, 2) as mean_ms, " +
+                    "  round(min_exec_time::numeric, 2) as min_ms, " +
+                    "  round(max_exec_time::numeric, 2) as max_ms, " +
+                    "  rows, " +
+                    "  left(query, 80) as query " +
+                    "FROM pg_stat_statements " +
+                    "WHERE userid = (SELECT usesysid FROM pg_user WHERE usename = 'root') " +
+                    "ORDER BY total_exec_time DESC " +
+                    "LIMIT 50;"
+                );
+                System.out.println("=".repeat(80) + "\n");
             }
         }
 
         public static void killService() throws IOException, InterruptedException {
+            printQueryStats();
             CmdHelper.runCommand(new String[] {
                     "docker", "stop", PG_SERVICE_NAME
             });
@@ -123,7 +341,7 @@ public class TestServiceUtils {
         }
 
         private static int runQuery(String query) throws InterruptedException, IOException {
-            System.out.println("Running query: " + query);
+            // System.out.println("Running query: " + query);
             return CmdHelper.runCommand(new String[] {
                     "docker", "exec", MYSQL_SERVICE_NAME, "mysql", "-uroot", "-proot", "-e", query
             });
@@ -180,7 +398,7 @@ public class TestServiceUtils {
         }
 
         private static int runCommand(String command) throws InterruptedException, IOException {
-            System.out.println("Running command: " + command);
+            // System.out.println("Running command: " + command);
             return CmdHelper.runCommand(new String[] {
                     "docker", "exec", MONGODB_SERVICE_NAME, "mongosh", "--eval", command
             });

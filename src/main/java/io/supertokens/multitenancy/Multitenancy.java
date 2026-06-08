@@ -16,8 +16,19 @@
 
 package io.supertokens.multitenancy;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import org.jetbrains.annotations.TestOnly;
+
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+
 import io.supertokens.Main;
 import io.supertokens.ResourceDistributor;
 import io.supertokens.authRecipe.AuthRecipe;
@@ -26,16 +37,24 @@ import io.supertokens.config.CoreConfig;
 import io.supertokens.featureflag.EE_FEATURES;
 import io.supertokens.featureflag.FeatureFlag;
 import io.supertokens.featureflag.exceptions.FeatureNotEnabledException;
-import io.supertokens.multitenancy.exception.*;
+import io.supertokens.migration.MigrationModeTransition;
+import io.supertokens.pluginInterface.MigrationMode;
+import io.supertokens.pluginInterface.authRecipe.exceptions.AnotherPrimaryUserWithEmailAlreadyExistsException;
+import io.supertokens.pluginInterface.authRecipe.exceptions.AnotherPrimaryUserWithPhoneNumberAlreadyExistsException;
+import io.supertokens.pluginInterface.authRecipe.exceptions.AnotherPrimaryUserWithThirdPartyInfoAlreadyExistsException;
+import io.supertokens.multitenancy.exception.BadPermissionException;
+import io.supertokens.multitenancy.exception.CannotDeleteNullAppIdException;
+import io.supertokens.multitenancy.exception.CannotDeleteNullConnectionUriDomainException;
+import io.supertokens.multitenancy.exception.CannotDeleteNullTenantException;
+import io.supertokens.multitenancy.exception.CannotModifyBaseConfigException;
 import io.supertokens.pluginInterface.KeyValueInfo;
 import io.supertokens.pluginInterface.STORAGE_TYPE;
 import io.supertokens.pluginInterface.Storage;
 import io.supertokens.pluginInterface.StorageUtils;
 import io.supertokens.pluginInterface.authRecipe.AuthRecipeUserInfo;
-import io.supertokens.pluginInterface.authRecipe.LoginMethod;
 import io.supertokens.pluginInterface.authRecipe.sqlStorage.AuthRecipeSQLStorage;
 import io.supertokens.pluginInterface.emailpassword.exceptions.DuplicateEmailException;
-import io.supertokens.pluginInterface.emailpassword.exceptions.UnknownUserIdException;
+import io.supertokens.pluginInterface.authRecipe.exceptions.UnknownUserIdException;
 import io.supertokens.pluginInterface.exceptions.InvalidConfigException;
 import io.supertokens.pluginInterface.exceptions.StorageQueryException;
 import io.supertokens.pluginInterface.exceptions.StorageTransactionLogicException;
@@ -50,13 +69,13 @@ import io.supertokens.pluginInterface.multitenancy.exceptions.TenantOrAppNotFoun
 import io.supertokens.pluginInterface.multitenancy.sqlStorage.MultitenancySQLStorage;
 import io.supertokens.pluginInterface.passwordless.exception.DuplicatePhoneNumberException;
 import io.supertokens.pluginInterface.thirdparty.exception.DuplicateThirdPartyUserException;
+import io.supertokens.pluginInterface.accountinfo.AccountInfoStorage;
+import io.supertokens.pluginInterface.useridmapping.LockedUser;
+import io.supertokens.pluginInterface.useridmapping.UserLockingStorage;
+import io.supertokens.pluginInterface.useridmapping.UserNotFoundForLockingException;
 import io.supertokens.storageLayer.StorageLayer;
 import io.supertokens.thirdparty.InvalidProviderConfigException;
 import io.supertokens.thirdparty.ThirdParty;
-import org.jetbrains.annotations.TestOnly;
-
-import java.io.IOException;
-import java.util.*;
 
 public class Multitenancy extends ResourceDistributor.SingletonResource {
 
@@ -179,6 +198,7 @@ public class Multitenancy extends ResourceDistributor.SingletonResource {
                 }
             }
 
+            // Build the tenant list including the target (for config inheritance resolution)
             TenantConfig[] existingTenants = getAllTenants(main);
             boolean updated = false;
             for (int i = 0; i < existingTenants.length; i++) {
@@ -197,15 +217,51 @@ public class Multitenancy extends ResourceDistributor.SingletonResource {
                 existingTenants[existingTenants.length - 1] = targetTenantConfig;
             }
 
-            Map<ResourceDistributor.KeyClass, JsonObject> normalisedConfigs = Config.getNormalisedConfigsForAllTenants(
-                    existingTenants,
+            // Validate only the target tenant instead of re-normalizing and re-validating all tenants.
+            // Existing tenants were already validated when they were added.
+            JsonObject normalisedConfig = Config.getNormalisedConfigForTenant(
+                    targetTenantConfig.tenantIdentifier, existingTenants,
                     Config.getBaseConfigAsJsonObject(main));
-            Config.assertAllTenantConfigsAreValid(main, normalisedConfigs, existingTenants);
+            Config.assertSingleTenantConfigIsValid(main, targetTenantConfig.tenantIdentifier,
+                    normalisedConfig, targetTenantConfig);
+        }
+
+        // Validate migration_mode state-machine transitions. We only enforce this when the
+        // proposed coreConfig actually carries a migration_mode entry — if it's absent, the
+        // existing value persists unchanged (no transition). The expensive backfill-pending
+        // probe inside MigrationModeTransition only runs for transitions whose target is MIGRATED.
+        if (targetTenantConfig.coreConfig.has("migration_mode")) {
+            JsonObject currentConfig = new JsonObject();
+            TenantConfig tenantInfo = getTenantInfo(main, targetTenantConfig.tenantIdentifier);
+            if (tenantInfo != null) {
+                currentConfig = tenantInfo.coreConfig;
+            }
+            MigrationMode oldMode = parseMigrationModeOrDefault(currentConfig);
+            MigrationMode newMode = parseMigrationModeOrDefault(targetTenantConfig.coreConfig);
+            MigrationModeTransition.validate(main,
+                    targetTenantConfig.tenantIdentifier.toAppIdentifier(),
+                    oldMode, newMode);
         }
 
         // validate third party config
         if (!skipThirdPartyConfigValidation) {
             ThirdParty.verifyThirdPartyProvidersArray(targetTenantConfig.thirdPartyConfig.providers);
+        }
+    }
+
+    /**
+     * Extracts migration_mode from a coreConfig JSON, defaulting to LEGACY when absent or
+     * unparseable. Mirrors the read-side coercion in PostgreSQLConfig.getMigrationMode so the
+     * transition validator agrees with the runtime parser.
+     */
+    private static MigrationMode parseMigrationModeOrDefault(JsonObject coreConfig) {
+        if (coreConfig == null || !coreConfig.has("migration_mode")) {
+            return MigrationMode.LEGACY;
+        }
+        try {
+            return MigrationMode.valueOf(coreConfig.get("migration_mode").getAsString().toUpperCase());
+        } catch (IllegalArgumentException | UnsupportedOperationException e) {
+            return MigrationMode.LEGACY;
         }
     }
 
@@ -256,13 +312,11 @@ public class Multitenancy extends ResourceDistributor.SingletonResource {
         try {
             StorageLayer.getMultitenancyStorage(main).createTenant(newTenant);
             creationInSharedDbSucceeded = true;
-            // we do not want to refresh the resources for this new tenant here cause
-            // it will cause creation of signing keys in the key_value table, which depends on
-            // the tenant being there in the tenants table. But that insertion is done in the addTenantIdInUserPool
-            // function below. So in order to actually refresh the resources, we have a finally block here which
-            // calls the forceReloadAllResources function.
+            // Use the fast refresh path that skips the expensive normalized config diff.
+            // We know exactly which tenant changed — it's the one we just created.
+            // This incrementally loads config + storage for just the new tenant.
             tenantsThatChanged = MultitenancyHelper.getInstance(main)
-                    .refreshTenantsInCoreBasedOnChangesInCoreConfigOrIfTenantListChanged(false);
+                    .refreshAfterKnownTenantChange(newTenant.tenantIdentifier);
             try {
                 ((MultitenancyStorage) StorageLayer.getStorage(newTenant.tenantIdentifier, main))
                         .addTenantIdInTargetStorage(newTenant.tenantIdentifier);
@@ -276,8 +330,9 @@ public class Multitenancy extends ResourceDistributor.SingletonResource {
             if (!creationInSharedDbSucceeded) {
                 try {
                     StorageLayer.getMultitenancyStorage(main).overwriteTenantConfig(newTenant);
+                    // Use the fast refresh path for the update case as well.
                     tenantsThatChanged = MultitenancyHelper.getInstance(main)
-                            .refreshTenantsInCoreBasedOnChangesInCoreConfigOrIfTenantListChanged(false);
+                            .refreshAfterKnownTenantChange(newTenant.tenantIdentifier);
 
                     // we do this extra step cause if previously an attempt to add a tenant failed midway,
                     // such that the main tenant was added in the user pool, but did not get created
@@ -312,7 +367,9 @@ public class Multitenancy extends ResourceDistributor.SingletonResource {
             throw new InvalidProviderConfigException("Duplicate clientType was specified in the clients list.");
         } finally {
             if (forceReloadResources) {
-                MultitenancyHelper.getInstance(main).forceReloadAllResources(tenantsThatChanged);
+                // Config + storage are already loaded by refreshAfterKnownTenantChange.
+                // Only load the remaining resources here (feature flags, signing keys, cronjobs).
+                MultitenancyHelper.getInstance(main).incrementalReloadResources(tenantsThatChanged);
             }
         }
     }
@@ -406,130 +463,40 @@ public class Multitenancy extends ResourceDistributor.SingletonResource {
         }
 
         AuthRecipeSQLStorage authRecipeStorage = StorageUtils.getAuthRecipeStorage(storage);
+        UserLockingStorage userLockingStorage = (UserLockingStorage) storage;
+        AccountInfoStorage accountInfoStorage = (AccountInfoStorage) storage;
         try {
             return authRecipeStorage.startTransaction(con -> {
-                String tenantId = tenantIdentifier.getTenantId();
-                AuthRecipeUserInfo userToAssociate = authRecipeStorage.getPrimaryUserById_Transaction(
-                        tenantIdentifier.toAppIdentifier(), con, userId);
-
-                if (userToAssociate != null && userToAssociate.isPrimaryUser) {
-                    Set<String> emails = new HashSet<>();
-                    Set<String> phoneNumbers = new HashSet<>();
-                    Set<LoginMethod.ThirdParty> thirdParties = new HashSet<>();
-
-                    // Loop through all the emails, phoneNumbers and thirdPartyInfos and check for conflicts
-                    for (LoginMethod lM : userToAssociate.loginMethods) {
-                        if (lM.email != null) {
-                            emails.add(lM.email);
-                        }
-                        if (lM.phoneNumber != null) {
-                            phoneNumbers.add(lM.phoneNumber);
-                        }
-                        if (lM.thirdParty != null) {
-                            thirdParties.add(lM.thirdParty);
-                        }
-                    }
-
-                    for (String email : emails) {
-                        AuthRecipeUserInfo[] usersWithSameEmail = authRecipeStorage.listPrimaryUsersByEmail_Transaction(
-                                tenantIdentifier.toAppIdentifier(), con, email);
-                        for (AuthRecipeUserInfo userWithSameEmail : usersWithSameEmail) {
-                            if (userWithSameEmail.getSupertokensUserId()
-                                    .equals(userToAssociate.getSupertokensUserId())) {
-                                continue; // it's the same user, no need to check anything
-                            }
-                            if (userWithSameEmail.isPrimaryUser && userWithSameEmail.tenantIds.contains(tenantId) &&
-                                    !userWithSameEmail.getSupertokensUserId().equals(userId)) {
-                                for (LoginMethod lm1 : userWithSameEmail.loginMethods) {
-                                    if (lm1.tenantIds.contains(tenantId)) {
-                                        for (LoginMethod lm2 : userToAssociate.loginMethods) {
-                                            if (lm1.recipeId.equals(lm2.recipeId) && email.equals(lm1.email) &&
-                                                    lm1.email.equals(lm2.email)) {
-                                                throw new StorageTransactionLogicException(
-                                                        new DuplicateEmailException());
-                                            }
-                                        }
-                                    }
-                                }
-                                throw new StorageTransactionLogicException(
-                                        new AnotherPrimaryUserWithEmailAlreadyExistsException(
-                                                userWithSameEmail.getSupertokensUserId()));
-                            }
-                        }
-                    }
-
-                    for (String phoneNumber : phoneNumbers) {
-                        AuthRecipeUserInfo[] usersWithSamePhoneNumber =
-                                authRecipeStorage.listPrimaryUsersByPhoneNumber_Transaction(
-                                        tenantIdentifier.toAppIdentifier(), con, phoneNumber);
-                        for (AuthRecipeUserInfo userWithSamePhoneNumber : usersWithSamePhoneNumber) {
-                            if (userWithSamePhoneNumber.getSupertokensUserId()
-                                    .equals(userToAssociate.getSupertokensUserId())) {
-                                continue; // it's the same user, no need to check anything
-                            }
-                            if (userWithSamePhoneNumber.tenantIds.contains(tenantId) &&
-                                    !userWithSamePhoneNumber.getSupertokensUserId().equals(userId)) {
-                                for (LoginMethod lm1 : userWithSamePhoneNumber.loginMethods) {
-                                    if (lm1.tenantIds.contains(tenantId)) {
-                                        for (LoginMethod lm2 : userToAssociate.loginMethods) {
-                                            if (lm1.recipeId.equals(lm2.recipeId) &&
-                                                    phoneNumber.equals(lm1.phoneNumber) &&
-                                                    lm1.phoneNumber.equals(lm2.phoneNumber)) {
-                                                throw new StorageTransactionLogicException(
-                                                        new DuplicatePhoneNumberException());
-                                            }
-                                        }
-                                    }
-                                }
-                                throw new StorageTransactionLogicException(
-                                        new AnotherPrimaryUserWithPhoneNumberAlreadyExistsException(
-                                                userWithSamePhoneNumber.getSupertokensUserId()));
-                            }
-                        }
-                    }
-
-                    for (LoginMethod.ThirdParty tp : thirdParties) {
-                        AuthRecipeUserInfo[] usersWithSameThirdPartyInfo =
-                                authRecipeStorage.listPrimaryUsersByThirdPartyInfo_Transaction(
-                                        tenantIdentifier.toAppIdentifier(), con, tp.id, tp.userId);
-                        for (AuthRecipeUserInfo userWithSameThirdPartyInfo : usersWithSameThirdPartyInfo) {
-                            if (userWithSameThirdPartyInfo.getSupertokensUserId()
-                                    .equals(userToAssociate.getSupertokensUserId())) {
-                                continue; // it's the same user, no need to check anything
-                            }
-                            if (userWithSameThirdPartyInfo.tenantIds.contains(tenantId) &&
-                                    !userWithSameThirdPartyInfo.getSupertokensUserId().equals(userId)) {
-                                for (LoginMethod lm1 : userWithSameThirdPartyInfo.loginMethods) {
-                                    if (lm1.tenantIds.contains(tenantId)) {
-                                        for (LoginMethod lm2 : userToAssociate.loginMethods) {
-                                            if (lm1.recipeId.equals(lm2.recipeId) && tp.equals(lm1.thirdParty) &&
-                                                    lm1.thirdParty.equals(lm2.thirdParty)) {
-                                                throw new StorageTransactionLogicException(
-                                                        new DuplicateThirdPartyUserException());
-                                            }
-                                        }
-                                    }
-                                }
-
-                                throw new StorageTransactionLogicException(
-                                        new AnotherPrimaryUserWithThirdPartyInfoAlreadyExistsException(
-                                                userWithSameThirdPartyInfo.getSupertokensUserId()));
-                            }
-                        }
-                    }
-                }
-
-                // userToAssociate may be null if the user is not associated to any tenants, we can still try and
-                // associate it. This happens only in CDI 3.0 where we allow disassociation from all tenants
-                // This will not happen in CDI >= 4.0 because we will not allow disassociation from all tenants
                 try {
+                    // IMPORTANT: Lock the user being added FIRST to serialize with concurrent linking operations.
+                    // The locking mechanism automatically locks the primary user too if this user is linked.
+                    // This ensures that if the user is being linked concurrently, we either see the linked state
+                    // (if linking completed before our lock) or the linking waits for our operation to complete.
+                    LockedUser lockedUser = userLockingStorage.lockUser(
+                            tenantIdentifier.toAppIdentifier(), con, userId);
+
+                    // After locking, check if the user is part of a primary user group (either IS primary or IS linked)
+                    // The locking mechanism already locked the primary user if this user is linked.
+                    if (lockedUser.getPrimaryUserId() != null) {
+                        accountInfoStorage.addTenantIdToPrimaryUser_Transaction(tenantIdentifier, con, lockedUser);
+                    }
+
+                    // Add the user to the tenant
+                    // Note: user may not be in any tenants yet (CDI 3.0 allows disassociation from all tenants)
+                    // This will not happen in CDI >= 4.0 because we will not allow disassociation from all tenants
                     boolean result = ((MultitenancySQLStorage) storage).addUserIdToTenant_Transaction(tenantIdentifier,
                             con, userId);
                     authRecipeStorage.commitTransaction(con);
                     return result;
                 } catch (TenantOrAppNotFoundException | UnknownUserIdException | DuplicatePhoneNumberException |
-                         DuplicateThirdPartyUserException | DuplicateEmailException e) {
+                         DuplicateThirdPartyUserException | DuplicateEmailException |
+                         AnotherPrimaryUserWithPhoneNumberAlreadyExistsException |
+                         AnotherPrimaryUserWithEmailAlreadyExistsException |
+                         AnotherPrimaryUserWithThirdPartyInfoAlreadyExistsException e) {
                     throw new StorageTransactionLogicException(e);
+                } catch (UserNotFoundForLockingException e) {
+                    // User doesn't exist
+                    throw new StorageTransactionLogicException(new UnknownUserIdException());
                 }
             });
         } catch (StorageTransactionLogicException e) {

@@ -14,6 +14,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Fix: fixes permission issues with the installer's jre
 - Fix: upgrade embedded tomcat and the OTEL related libs because of security vulnerabilities
 
+- Lowers default transaction isolation level from SERIALIZABLE to READ_COMMITTED
+- Adds per-tenant `migration_mode` config with a state-machine validator for staged schema migration
+- Adds `BackfillReservationTables` cron job for online backfill
+- Adds `GET /migration/mode` and `GET /migration/backfill/progress` operator endpoints
+- Adds offline migration SQL scripts in `supertokens-postgresql-plugin/migration-scripts/`
+- Rewrites conflict detection for `makePrimaryUser`, `linkAccounts`, and `updateEmail` using `LockedUser` interfaces
+- Throttles `user_last_active` upserts on session refresh
+- Storages now warm up in parallel during boot
+
+### Migration
+
+See [SCHEMA-REWORK.md](SCHEMA-REWORK.md) for the operator runbook.
+
 ## [11.4.4]
 
 - Fix: adds the otel-javaagent to the installed distribution

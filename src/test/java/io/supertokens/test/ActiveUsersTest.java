@@ -40,6 +40,7 @@ public class ActiveUsersTest {
     @Before
     public void beforeEach() {
         Utils.reset();
+        ActiveUsers.clearCacheForTesting();
     }
 
     @Test
@@ -67,6 +68,9 @@ public class ActiveUsersTest {
 
         long now2 = System.currentTimeMillis();
 
+        // Throttle would otherwise skip this update since user1 was just touched above; clear so
+        // the test exercises a fresh DB write at now2.
+        ActiveUsers.clearCacheForTesting();
         ActiveUsers.updateLastActive(main, "user1");
 
         assert ActiveUsers.countUsersActiveSince(main, now2) == 1; // only user1 is counted
@@ -187,6 +191,8 @@ public class ActiveUsersTest {
 
         long now2 = System.currentTimeMillis();
 
+        // See clearCacheForTesting above — throttle would skip the second update otherwise.
+        ActiveUsers.clearCacheForTesting();
         ActiveUsers.updateLastActive(main, "user1");
 
         params.put("since", Long.toString(now2));
@@ -224,7 +230,7 @@ public class ActiveUsersTest {
     public void testThatActiveUserDataIsSavedInPublicTenantStorage() throws Exception {
         String[] args = {"../"};
 
-        TestingProcessManager.TestingProcess process = TestingProcessManager.start(args);
+        TestingProcessManager.TestingProcess process = TestingProcessManager.startIsolatedProcess(args, false);
         FeatureFlagTestContent.getInstance(process.getProcess())
                 .setKeyValue(FeatureFlagTestContent.ENABLED_FEATURES, new EE_FEATURES[]{EE_FEATURES.MULTI_TENANCY});
         process.startProcess();

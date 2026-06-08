@@ -778,6 +778,9 @@ public class ProcessBulkImportUsersCronJobTest {
 
         UserPaginationContainer container = AuthRecipe.getUsers(main, 100, "ASC", null, null, null);
         assertEquals(0, container.users.length);
+
+        process.kill();
+        assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STOPPED));
     }
 
 
@@ -822,6 +825,9 @@ public class ProcessBulkImportUsersCronJobTest {
 
         UserPaginationContainer container = AuthRecipe.getUsers(main, 100, "ASC", null, null, null);
         assertEquals(0, container.users.length);
+
+        process.kill();
+        assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STOPPED));
     }
 
     @Test
@@ -874,6 +880,9 @@ public class ProcessBulkImportUsersCronJobTest {
         UserPaginationContainer container = AuthRecipe.getUsers(main, 100, "ASC", null, null, null);
         assertEquals(99, container.users.length);
         assertEquals(1, numberOfFailed);
+
+        process.kill();
+        assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STOPPED));
     }
 
 
@@ -907,6 +916,9 @@ public class ProcessBulkImportUsersCronJobTest {
         assertEquals(
                 "[Invalid tenantId: t1 for a user role., Invalid tenantId: t1 for a user role., Invalid tenantId: t1 for emailpassword recipe., Invalid tenantId: t1 for thirdparty recipe., Invalid tenantId: t1 for passwordless recipe.]",
                 usersAfterProcessing.get(0).errorMessage);
+
+        process.kill();
+        assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STOPPED));
     }
 
     @Test
@@ -940,6 +952,9 @@ public class ProcessBulkImportUsersCronJobTest {
         assertEquals(
                 "[All tenants for a user must share the same database for emailpassword recipe., All tenants for a user must share the same database for thirdparty recipe., All tenants for a user must share the same database for passwordless recipe.]",
                 usersAfterProcessing.get(0).errorMessage);
+
+        process.kill();
+        assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STOPPED));
     }
 
     private TestingProcess startCronProcess() throws InterruptedException, TenantOrAppNotFoundException {

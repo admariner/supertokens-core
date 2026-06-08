@@ -421,7 +421,14 @@ public class CoreConfig {
     @JsonProperty
     @ConfigDescription("If specified, the supertokens core will load the specified number of users for migrating in " +
             "one single batch. (Default: 8000)")
-    private int bulk_migration_batch_size =  8000;
+    private int bulk_migration_batch_size = 8000;
+
+    @EnvName("BULK_MIGRATION_SLEEP_BETWEEN_ROUNDS_IN_BATCH_MS")
+    @NotConflictingInApp
+    @JsonProperty
+    @ConfigDescription(
+            "If specified, the bulk migration will wait between rounds. To disable it, set it to null. (Default: 1000)")
+    private Integer bulk_migration_sleep_between_rounds_in_batch_ms = 1000;
 
     @EnvName("WEBAUTHN_RECOVER_ACCOUNT_TOKEN_LIFETIME")
     @NotConflictingInApp
@@ -694,6 +701,10 @@ public class CoreConfig {
 
     public int getBulkMigrationBatchSize() {
         return bulk_migration_batch_size;
+    }
+
+    public Integer getBulkMigrationSleepBetweenRoundsInBatchMs() {
+        return bulk_migration_sleep_between_rounds_in_batch_ms;
     }
 
     public String getOtelCollectorConnectionURI() {
@@ -1130,14 +1141,15 @@ public class CoreConfig {
         }
 
         if (Main.isTesting) {
+            String oauthHost = System.getProperty("ST_OAUTH_PROVIDER_SERVICE_HOST", "localhost");
             if (oauth_provider_public_service_url == null) {
-                oauth_provider_public_service_url = "http://localhost:" + System.getProperty("ST_OAUTH_PROVIDER_SERVICE_PORT");
+                oauth_provider_public_service_url = "http://" + oauthHost + ":" + System.getProperty("ST_OAUTH_PROVIDER_SERVICE_PORT");
             }
             if (oauth_provider_admin_service_url == null) {
-                oauth_provider_admin_service_url = "http://localhost:" + System.getProperty("ST_OAUTH_PROVIDER_ADMIN_PORT");
+                oauth_provider_admin_service_url = "http://" + oauthHost + ":" + System.getProperty("ST_OAUTH_PROVIDER_ADMIN_PORT");
             }
             if (oauth_provider_url_configured_in_oauth_provider == null) {
-                oauth_provider_url_configured_in_oauth_provider = "http://localhost:4444";
+                oauth_provider_url_configured_in_oauth_provider = "http://" + oauthHost + ":4444";
             }
             if (oauth_client_secret_encryption_key == null) {
                 oauth_client_secret_encryption_key = "clientsecretencryptionkey";
@@ -1225,9 +1237,11 @@ public class CoreConfig {
 
                 if (fieldType == String.class) {
                     valueType = "string";
-                } else if (fieldType == boolean.class) {
+                } else if (fieldType == boolean.class || fieldType == Boolean.class) {
                     valueType = "boolean";
-                } else if (fieldType == int.class || fieldType == long.class || fieldType == double.class) {
+                } else if (fieldType == int.class || fieldType == Integer.class
+                        || fieldType == long.class || fieldType == Long.class
+                        || fieldType == double.class || fieldType == Double.class) {
                     valueType = "number";
                 } else {
                     throw new RuntimeException("Unknown field type " + fieldType.getName());

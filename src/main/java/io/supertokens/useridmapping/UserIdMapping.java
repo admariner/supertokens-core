@@ -25,7 +25,7 @@ import io.supertokens.pluginInterface.StorageUtils;
 import io.supertokens.pluginInterface.authRecipe.AuthRecipeUserInfo;
 import io.supertokens.pluginInterface.authRecipe.LoginMethod;
 import io.supertokens.pluginInterface.bulkimport.exceptions.BulkImportBatchInsertException;
-import io.supertokens.pluginInterface.emailpassword.exceptions.UnknownUserIdException;
+import io.supertokens.pluginInterface.authRecipe.exceptions.UnknownUserIdException;
 import io.supertokens.pluginInterface.emailverification.EmailVerificationStorage;
 import io.supertokens.pluginInterface.exceptions.StorageQueryException;
 import io.supertokens.pluginInterface.exceptions.StorageTransactionLogicException;
@@ -413,6 +413,16 @@ public class UserIdMapping {
                     externalUserId, externalUserIdInfo, force, makeExceptionForEmailVerification);
         } catch (TenantOrAppNotFoundException e) {
             throw new IllegalStateException(e);
+        }
+    }
+
+    public static String getExternalUserId(AppIdentifier appIdentifier, Storage storage, String userId)
+            throws StorageQueryException {
+        io.supertokens.pluginInterface.useridmapping.UserIdMapping mapping = getUserIdMapping(appIdentifier, storage, userId, UserIdType.SUPERTOKENS);
+        if (mapping == null || mapping.externalUserId == null) {
+            return userId;
+        } else {
+            return mapping.externalUserId;
         }
     }
 
