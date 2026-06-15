@@ -18,6 +18,8 @@ package io.supertokens.passwordless;
 
 import io.supertokens.Main;
 import io.supertokens.ResourceDistributor;
+import io.supertokens.auditlog.AuditLog;
+import io.supertokens.pluginInterface.auditlog.AuditLogEvent;
 import io.supertokens.authRecipe.AuthRecipe;
 import io.supertokens.config.Config;
 import io.supertokens.pluginInterface.authRecipe.exceptions.EmailChangeNotAllowedException;
@@ -492,6 +494,13 @@ public class Passwordless {
                 }
             }
 
+            AuditLog.emit(main, storage, tenantIdentifier, new AuditLogEvent(
+                    tenantIdentifier.getAppId(), tenantIdentifier.getTenantId(),
+                    user.getSupertokensUserId(), user.getSupertokensUserId(),
+                    "passwordless_sign_up", "success",
+                    consumedDevice.email != null ? "email" : "phone_number",
+                    consumedDevice.email != null ? consumedDevice.email : consumedDevice.phoneNumber,
+                    System.currentTimeMillis(), null));
             return new ConsumeCodeResponse(true, user, consumedDevice.email, consumedDevice.phoneNumber, consumedDevice);
         } else {
             if (setEmailVerified && consumedDevice.email != null) {
@@ -529,6 +538,13 @@ public class Passwordless {
                 removeCodesByPhoneNumber(tenantIdentifier, storage, loginMethod.phoneNumber);
             }
         }
+        AuditLog.emit(main, storage, tenantIdentifier, new AuditLogEvent(
+                tenantIdentifier.getAppId(), tenantIdentifier.getTenantId(),
+                user.getSupertokensUserId(), user.getSupertokensUserId(),
+                "passwordless_sign_in", "success",
+                consumedDevice.email != null ? "email" : "phone_number",
+                consumedDevice.email != null ? consumedDevice.email : consumedDevice.phoneNumber,
+                System.currentTimeMillis(), null));
         return new ConsumeCodeResponse(false, user, consumedDevice.email, consumedDevice.phoneNumber, consumedDevice);
     }
 

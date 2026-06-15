@@ -28,6 +28,8 @@ import org.jetbrains.annotations.TestOnly;
 
 import io.supertokens.Main;
 import io.supertokens.ResourceDistributor;
+import io.supertokens.auditlog.AuditLog;
+import io.supertokens.pluginInterface.auditlog.AuditLogEvent;
 import io.supertokens.authRecipe.AuthRecipe;
 import io.supertokens.config.Config;
 import io.supertokens.config.CoreConfig;
@@ -147,6 +149,11 @@ public class EmailPassword {
                     }
                 }
 
+                AuditLog.emit(main, storage, tenantIdentifier, new AuditLogEvent(
+                        tenantIdentifier.getAppId(), tenantIdentifier.getTenantId(),
+                        newUser.getSupertokensUserId(), newUser.getSupertokensUserId(),
+                        "emailpassword_sign_up", "success", "email", email,
+                        System.currentTimeMillis(), null));
                 return newUser;
             } catch (DuplicateUserIdException ignored) {
                 // we retry with a new userId (while loop)
@@ -350,6 +357,11 @@ public class EmailPassword {
             throw new WrongCredentialsException();
         }
 
+        AuditLog.emit(main, storage, tenantIdentifier, new AuditLogEvent(
+                tenantIdentifier.getAppId(), tenantIdentifier.getTenantId(),
+                lM.getSupertokensUserId(), user.getSupertokensUserId(),
+                "emailpassword_sign_in", "success", "email", email,
+                System.currentTimeMillis(), null));
         return user;
     }
 
