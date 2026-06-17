@@ -964,7 +964,7 @@ public class CronjobTest {
         {
             List<List<List<TenantIdentifier>>> tenantsInfos = Cronjobs.getInstance(process.getProcess())
                     .getTenantInfos();
-            assertEquals(15, tenantsInfos.size());
+            assertEquals(16, tenantsInfos.size());
             int count = 0;
             for (List<List<TenantIdentifier>> tenantsInfo : tenantsInfos) {
                 if (tenantsInfo != null) {
@@ -976,7 +976,7 @@ public class CronjobTest {
                     count++;
                 }
             }
-            assertEquals(14, count);
+            assertEquals(15, count);
         }
 
         process.kill(false);
@@ -993,7 +993,7 @@ public class CronjobTest {
         {
             List<List<List<TenantIdentifier>>> tenantsInfos = Cronjobs.getInstance(process.getProcess())
                     .getTenantInfos();
-            assertEquals(15, tenantsInfos.size());
+            assertEquals(16, tenantsInfos.size());
             int count = 0;
             for (List<List<TenantIdentifier>> tenantsInfo : tenantsInfos) {
                 if (tenantsInfo != null) {
@@ -1005,7 +1005,7 @@ public class CronjobTest {
                     count++;
                 }
             }
-            assertEquals(14, count);
+            assertEquals(15, count);
         }
 
         process.kill();

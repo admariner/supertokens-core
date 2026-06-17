@@ -103,6 +103,14 @@ public class TestAppData {
         return Arrays.stream(arr).filter(s -> !Arrays.asList(toRemove).contains(s)).toArray(String[]::new);
     }
 
+    // activity_log is an append-only audit log with no app_id->apps FK cascade, so its rows are
+    // intentionally retained after an app is deleted. On Postgres it is range-partitioned, so its
+    // physical tables are the parent plus dynamically-named monthly/default partitions
+    // (activity_log, activity_log_default, activity_log_pYYYYMM) — match the whole family by prefix.
+    private String[] removeActivityLogTables(String[] arr) {
+        return Arrays.stream(arr).filter(s -> !s.startsWith("activity_log")).toArray(String[]::new);
+    }
+
     private static String generateTotpCode(Main main, TOTPDevice device, int step)
             throws InvalidKeyException, StorageQueryException {
         final TimeBasedOneTimePasswordGenerator totp = new TimeBasedOneTimePasswordGenerator(
@@ -135,10 +143,7 @@ public class TestAppData {
                 "recipe_user_tenants", "recipe_user_account_infos", "primary_user_tenants",
                 // Legacy tables that are not populated in MIGRATED mode.
                 "all_auth_recipe_users", "emailpassword_user_to_tenant", "thirdparty_user_to_tenant",
-                "passwordless_user_to_tenant", "webauthn_user_to_tenant",
-                // Append-only audit log: intentionally has no app_id->apps FK cascade, so its rows
-                // are retained after an app is deleted rather than purged with the rest of the data.
-                "activity_log"};
+                "passwordless_user_to_tenant", "webauthn_user_to_tenant"};
 
         TenantIdentifier app = new TenantIdentifier(null, "a1", null);
 
@@ -154,7 +159,7 @@ public class TestAppData {
                 StorageLayer.getStorage(app, process.getProcess()));
 
         String[] allTableNames = appStorage.getAllTablesInTheDatabase();
-        allTableNames = removeStrings(allTableNames, tablesToIgnore);
+        allTableNames = removeActivityLogTables(removeStrings(allTableNames, tablesToIgnore));
         Arrays.sort(allTableNames);
 
         // Add all recipe data
@@ -260,7 +265,7 @@ public class TestAppData {
 
         String[] tablesThatHaveData = appStorage
                 .getAllTablesInTheDatabaseThatHasDataForAppId(app.getAppId());
-        tablesThatHaveData = removeStrings(tablesThatHaveData, tablesToIgnore);
+        tablesThatHaveData = removeActivityLogTables(removeStrings(tablesThatHaveData, tablesToIgnore));
         Arrays.sort(tablesThatHaveData);
 
         assertEquals(allTableNames, tablesThatHaveData);
@@ -270,7 +275,7 @@ public class TestAppData {
 
         // Check no data is remaining in any of the tables
         tablesThatHaveData = appStorage.getAllTablesInTheDatabaseThatHasDataForAppId(app.getAppId());
-        tablesThatHaveData = removeStrings(tablesThatHaveData, tablesToIgnore);
+        tablesThatHaveData = removeActivityLogTables(removeStrings(tablesThatHaveData, tablesToIgnore));
         assertEquals(0, tablesThatHaveData.length);
 
         process.kill();
