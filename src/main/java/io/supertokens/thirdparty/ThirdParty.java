@@ -18,6 +18,8 @@ package io.supertokens.thirdparty;
 
 import io.supertokens.Main;
 import io.supertokens.ResourceDistributor;
+import io.supertokens.auditlog.AuditLog;
+import io.supertokens.pluginInterface.auditlog.AuditLogEvent;
 import io.supertokens.pluginInterface.authRecipe.exceptions.EmailChangeNotAllowedException;
 import io.supertokens.multitenancy.Multitenancy;
 import io.supertokens.multitenancy.exception.BadPermissionException;
@@ -205,6 +207,12 @@ public class ThirdParty {
             }
         }
 
+        AuditLog.emit(main, storage, tenantIdentifier, new AuditLogEvent(
+                tenantIdentifier.getAppId(), tenantIdentifier.getTenantId(),
+                response.user.getSupertokensUserId(), response.user.getSupertokensUserId(),
+                response.createdNewUser ? "thirdparty_sign_up" : "thirdparty_sign_in",
+                "success", thirdPartyId, email,
+                System.currentTimeMillis(), null));
         return response;
     }
 

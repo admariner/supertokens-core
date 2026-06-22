@@ -19,6 +19,8 @@ package io.supertokens.session;
 import com.google.gson.JsonObject;
 import io.supertokens.Main;
 import io.supertokens.ProcessState;
+import io.supertokens.auditlog.AuditLog;
+import io.supertokens.pluginInterface.auditlog.AuditLogEvent;
 import io.supertokens.ResourceDistributor;
 import io.supertokens.config.Config;
 import io.supertokens.config.CoreConfig;
@@ -182,6 +184,8 @@ public class Session {
                 .createNewSession(tenantIdentifier, sessionHandle, recipeUserId,
                         Utils.hashSHA256(Utils.hashSHA256(refreshToken.token)), userDataInDatabase, refreshToken.expiry,
                         userDataInJWT, refreshToken.createdTime, useStaticKey);
+
+        emitSessionCreatedEvent(main, storage, tenantIdentifier, recipeUserId, primaryUserId, sessionHandle);
 
         TokenInfo idRefreshToken = new TokenInfo(UUID.randomUUID().toString(), refreshToken.expiry,
                 refreshToken.createdTime);
@@ -1084,5 +1088,20 @@ public class Session {
         }
 
         return parts[1];
+    }
+
+    private static void emitSessionCreatedEvent(Main main, Storage storage, TenantIdentifier tenantIdentifier,
+            String recipeUserId, String primaryUserId, String sessionHandle) {
+        AuditLog.emit(main, storage, tenantIdentifier, new AuditLogEvent(
+                tenantIdentifier.getAppId(),
+                tenantIdentifier.getTenantId(),
+                recipeUserId,
+                primaryUserId,
+                "session_created",
+                "success",
+                null,
+                sessionHandle,
+                System.currentTimeMillis(),
+                null));
     }
 }

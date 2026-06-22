@@ -78,7 +78,9 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
 import io.supertokens.Main;
+import io.supertokens.auditlog.AuditLog;
 import io.supertokens.config.Config;
+import io.supertokens.pluginInterface.auditlog.AuditLogEvent;
 import io.supertokens.config.CoreConfig;
 import io.supertokens.featureflag.EE_FEATURES;
 import io.supertokens.featureflag.FeatureFlag;
@@ -484,7 +486,14 @@ public class SAML {
 
         String code = UUID.randomUUID().toString();
         samlStorage.saveSAMLClaims(tenantIdentifier, client.clientId, code, claims, config.getSAMLClaimsValidity());
-        
+
+        AuditLog.emit(main, storage, tenantIdentifier, new AuditLogEvent(
+                tenantIdentifier.getAppId(), tenantIdentifier.getTenantId(),
+                null, null,
+                "saml_callback", "success",
+                client.clientId, null,
+                System.currentTimeMillis(), null));
+
         try {
             java.net.URI uri = new java.net.URI(redirectURI);
             String query = uri.getQuery();

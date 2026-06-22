@@ -571,6 +571,12 @@ public class GeneralQueries {
             // indexes
             update(start, AccountInfoQueries.getQueryToCreatePrimaryUserIndexForPrimaryUserTenantsTable(start), NO_OP_SETTER);
         }
+
+        if (!doesTableExists(start, Config.getConfig(start).getActivityLogTable())) {
+            getInstance(main).addState(CREATING_NEW_TABLE, null);
+            update(start, ActivityLogQueries.getQueryToCreateActivityLogTable(start), NO_OP_SETTER);
+            update(start, ActivityLogQueries.getQueryToCreateCreatedAtIndex(start), NO_OP_SETTER);
+        }
     }
 
     public static void setKeyValue_Transaction(Start start, Connection con, TenantIdentifier tenantIdentifier,

@@ -226,4 +226,8 @@ public class SQLiteConfig {
     public String getPrimaryUserTenantsTable() {
         return "primary_user_tenants";
     }
+
+    public String getActivityLogTable() {
+        return "activity_log";
+    }
 }

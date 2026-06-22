@@ -7,6 +7,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [12.0.3]
+
+- Adds an append-only `activity_log` audit log; a `user_last_active` event is now written to it whenever a user's last-active timestamp is updated
+- Adds the `CleanupActivityLogPartitions` cron that maintains the `activity_log` month-partitions (pre-creates upcoming months, drops a partition once its whole month is older than 31 days)
+- Removes the external `AuditLogSink` plugin mechanism
+
+### Migration
+
+The `activity_log` table DDL is in [SCHEMA-REWORK.md](SCHEMA-REWORK.md#pre-flight).
+
 ## [12.0.2]
 
 - Fix: Protection against SAML XML signature wrapping (XSW) attack.
@@ -33,7 +43,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Migration
 
-See [SCHEMA-REWORK.md](SCHEMA-REWORK.md) for the operator runbook.
+See [SCHEMA-REWORK.md](SCHEMA-REWORK.md) for the operator runbook; the full schema DDL is in its [Pre-flight](SCHEMA-REWORK.md#pre-flight) section.
 
 ## [11.4.4]
 

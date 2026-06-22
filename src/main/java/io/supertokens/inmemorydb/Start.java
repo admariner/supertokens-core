@@ -52,6 +52,9 @@ import io.supertokens.pluginInterface.jwt.JWTRecipeStorage;
 import io.supertokens.pluginInterface.jwt.JWTSigningKeyInfo;
 import io.supertokens.pluginInterface.jwt.exceptions.DuplicateKeyIdException;
 import io.supertokens.pluginInterface.jwt.sqlstorage.JWTRecipeSQLStorage;
+import io.supertokens.inmemorydb.queries.ActivityLogQueries;
+import io.supertokens.pluginInterface.auditlog.ActivityLogStorage;
+import io.supertokens.pluginInterface.auditlog.AuditLogEvent;
 import io.supertokens.pluginInterface.migration.MigrationBackfillStorage;
 import io.supertokens.pluginInterface.multitenancy.AppIdentifier;
 import io.supertokens.pluginInterface.multitenancy.MultitenancyStorage;
@@ -124,7 +127,7 @@ public class Start
         JWTRecipeSQLStorage, PasswordlessSQLStorage, UserMetadataSQLStorage, UserRolesSQLStorage, UserIdMappingStorage,
         UserIdMappingSQLStorage, MultitenancyStorage, MultitenancySQLStorage, TOTPSQLStorage, ActiveUsersStorage,
         ActiveUsersSQLStorage, DashboardSQLStorage, AuthRecipeSQLStorage, OAuthStorage, OAuthSQLStorage, WebAuthNSQLStorage,
-        SAMLStorage, UserLockingStorage, AccountInfoStorage, MigrationBackfillStorage {
+        SAMLStorage, UserLockingStorage, AccountInfoStorage, MigrationBackfillStorage, ActivityLogStorage {
 
     private static final Object appenderLock = new Object();
     private static final String ACCESS_TOKEN_SIGNING_KEY_NAME = "access_token_signing_key";
@@ -4314,5 +4317,23 @@ public class Start
     @Override
     public int verifyBackfillCompleteness(AppIdentifier appIdentifier) {
         return 0; // Always consistent in InMemoryDB
+    }
+
+    // ActivityLogStorage implementation
+
+    @Override
+    public void createActivityLogEntry(TenantIdentifier tenantIdentifier, AuditLogEvent event)
+            throws StorageQueryException {
+        try {
+            ActivityLogQueries.createActivityLogEntry(this, tenantIdentifier, event);
+        } catch (SQLException e) {
+            throw new StorageQueryException(e);
+        }
+    }
+
+    @Override
+    public void maintainActivityLogPartitions() {
+        // The in-memory (SQLite) store keeps activity_log as a plain, unpartitioned table, so there
+        // is nothing to maintain.
     }
 }

@@ -964,7 +964,7 @@ public class CronjobTest {
         {
             List<List<List<TenantIdentifier>>> tenantsInfos = Cronjobs.getInstance(process.getProcess())
                     .getTenantInfos();
-            assertEquals(15, tenantsInfos.size());
+            assertEquals(16, tenantsInfos.size());
             int count = 0;
             for (List<List<TenantIdentifier>> tenantsInfo : tenantsInfos) {
                 if (tenantsInfo != null) {
@@ -976,7 +976,7 @@ public class CronjobTest {
                     count++;
                 }
             }
-            assertEquals(14, count);
+            assertEquals(15, count);
         }
 
         process.kill(false);
@@ -993,7 +993,7 @@ public class CronjobTest {
         {
             List<List<List<TenantIdentifier>>> tenantsInfos = Cronjobs.getInstance(process.getProcess())
                     .getTenantInfos();
-            assertEquals(15, tenantsInfos.size());
+            assertEquals(16, tenantsInfos.size());
             int count = 0;
             for (List<List<TenantIdentifier>> tenantsInfo : tenantsInfos) {
                 if (tenantsInfo != null) {
@@ -1005,7 +1005,7 @@ public class CronjobTest {
                     count++;
                 }
             }
-            assertEquals(14, count);
+            assertEquals(15, count);
         }
 
         process.kill();
@@ -1058,6 +1058,8 @@ public class CronjobTest {
         intervals.put("io.supertokens.cronjobs.cleanupWebauthnExpiredData.CleanUpWebauthNExpiredDataCron", 86400);
         intervals.put("io.supertokens.cronjobs.deleteExpiredSAMLData.DeleteExpiredSAMLData", 3600);
         intervals.put("io.supertokens.cronjobs.backfill.BackfillReservationTables", 300);
+        intervals.put(
+                "io.supertokens.cronjobs.cleanupActivityLogPartitions.CleanupActivityLogPartitions", 86400);
 
         Map<String, Integer> delays = new HashMap<>();
         delays.put("io.supertokens.ee.cronjobs.EELicenseCheck", 86400);
@@ -1078,9 +1080,10 @@ public class CronjobTest {
         delays.put("io.supertokens.cronjobs.cleanupWebauthnExpiredData.CleanUpWebauthNExpiredDataCron", 0);
         delays.put("io.supertokens.cronjobs.deleteExpiredSAMLData.DeleteExpiredSAMLData", 0);
         delays.put("io.supertokens.cronjobs.backfill.BackfillReservationTables", 10);
+        delays.put("io.supertokens.cronjobs.cleanupActivityLogPartitions.CleanupActivityLogPartitions", 0);
 
         List<CronTask> allTasks = Cronjobs.getInstance(process.getProcess()).getTasks();
-        assertEquals(15, allTasks.size());
+        assertEquals(16, allTasks.size());
 
         for (CronTask task : allTasks) {
             assertEquals(intervals.get(task.getClass().getName()).intValue(), task.getIntervalTimeSeconds());
