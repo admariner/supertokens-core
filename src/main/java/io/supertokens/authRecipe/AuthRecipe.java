@@ -616,16 +616,7 @@ public class AuthRecipe {
             throws StorageQueryException {
         AuthRecipeSQLStorage authRecipeStorage = StorageUtils.getAuthRecipeStorage(storage);
 
-        // Acquire lock FIRST to serialize with concurrent link/tenant/email-update operations.
-        // Without this lock, deleteUser can read stale state while another thread modifies
-        // the user (e.g., linkAccounts linking R1 to P1 while deleteUser reads R1 as unlinked).
         UserLockingStorage lockingStorage = (UserLockingStorage) storage;
-        try {
-            lockingStorage.lockUser(appIdentifier, con, userId);
-        } catch (UserNotFoundForLockingException e) {
-            // User already deleted by another thread — nothing to do
-            return;
-        }
 
         String userIdToDeleteForNonAuthRecipeForRecipeUserId;
         String userIdToDeleteForAuthRecipe;
@@ -673,6 +664,21 @@ public class AuthRecipe {
         }
 
         assert (userIdToDeleteForAuthRecipe != null);
+
+        // Acquire the row lock now that the mapped (external) id has been resolved to the
+        // SuperTokens id. The lock targets app_id_to_user_id.user_id, which only ever holds
+        // SuperTokens ids — locking on the raw external id would never match a row, get
+        // wrongly swallowed as "already deleted by another thread", and leave the user
+        // undeleted. userIdToDeleteForAuthRecipe is a SuperTokens id in every branch above.
+        // This still serializes with concurrent link/tenant/email-update operations: the
+        // user-state read (getPrimaryUserById_Transaction) happens after this lock, and the
+        // A3/A4 classification read above only inspects the passed-in mapping.
+        try {
+            lockingStorage.lockUser(appIdentifier, con, userIdToDeleteForAuthRecipe);
+        } catch (UserNotFoundForLockingException e) {
+            // User already deleted by another thread — nothing to do
+            return;
+        }
 
         // this user ID represents the non auth recipe stuff to delete for the primary user id
         String primaryUserIdToDeleteNonAuthRecipe = null;

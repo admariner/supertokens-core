@@ -112,6 +112,68 @@ public class DeleteUserAPIWithUserIdMappingTest {
         assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STOPPED));
     }
 
+    // Regression test for deleting a user by their MAPPED (external) user id.
+    //
+    // This is the common "A3" state: the external id is an arbitrary string that only
+    // exists in the userid_mapping table, not in app_id_to_user_id. The /user/remove API
+    // passes the raw incoming id straight into AuthRecipe.deleteUser, and deleteUserHelper
+    // acquires its row lock (lockUser) on that id BEFORE resolving the mapping to the
+    // SuperTokens id. lockUser only matches app_id_to_user_id.user_id (SuperTokens ids),
+    // so a mapped id finds no row, throws UserNotFoundForLockingException, which the helper
+    // swallows as "already deleted by another thread" and returns early — leaving the user
+    // undeleted while the API still reports status OK.
+    //
+    // Existing tests in this file delete by superTokensUserId, so they never exercise this
+    // path. This test deletes by the external id and asserts the user is actually removed.
+    @Test
+    public void testDeleteUserWithMappedExternalId() throws Exception {
+        String[] args = {"../"};
+        TestingProcessManager.TestingProcess process = TestingProcessManager.start(args);
+        assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STARTED));
+
+        if (StorageLayer.getStorage(process.getProcess()).getType() != STORAGE_TYPE.SQL) {
+            return;
+        }
+
+        // create User
+        AuthRecipeUserInfo userInfo = EmailPassword.signUp(process.getProcess(), "test@example.com", "testPass123");
+        String superTokensUserId = userInfo.getSupertokensUserId();
+        String externalId = "externalId";
+
+        // map their id
+        UserIdMapping.createUserIdMapping(process.getProcess(), superTokensUserId, externalId, null, false);
+
+        // attach metadata keyed by the external id
+        JsonObject testData = new JsonObject();
+        testData.addProperty("testKey", "testValue");
+        UserMetadata.updateUserMetadata(process.getProcess(), externalId, testData);
+
+        // sanity: the user exists before we delete
+        assertNotNull(EmailPassword.getUserUsingId(process.getProcess(), superTokensUserId));
+
+        // delete using the EXTERNAL (mapped) id rather than the SuperTokens id
+        JsonObject requestBody = new JsonObject();
+        requestBody.addProperty("userId", externalId);
+
+        JsonObject deleteResponse = HttpRequestForTesting.sendJsonPOSTRequest(process.getProcess(), "",
+                "http://localhost:3567/user/remove", requestBody, 1000, 1000, null,
+                SemVer.v2_15.get(), "");
+        assertEquals("OK", deleteResponse.get("status").getAsString());
+
+        // the auth user must actually be gone
+        assertNull(EmailPassword.getUserUsingId(process.getProcess(), superTokensUserId));
+
+        // the metadata stored under the external id must be gone
+        assertEquals(0,
+                UserMetadata.getUserMetadata(process.getProcess(), externalId).entrySet().size());
+
+        // the mapping must be gone
+        assertNull(UserIdMapping.getUserIdMapping(process.getProcess(), superTokensUserId, UserIdType.SUPERTOKENS));
+
+        process.kill();
+        assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STOPPED));
+    }
+
     // In reference to https://docs.google.com/spreadsheets/d/17hYV32B0aDCeLnSxbZhfRN2Y9b0LC2xUF44vV88RNAA/edit#gid=0
     // test intermediate state behavior, deleting superTokensUserId_1
     @Test
