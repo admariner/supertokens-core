@@ -20,6 +20,7 @@ import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.SpanBuilder;
+import io.opentelemetry.api.trace.TracerProvider;
 import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.propagation.ContextPropagators;
@@ -34,6 +35,7 @@ import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import io.supertokens.Main;
 import io.supertokens.ResourceDistributor;
 import io.supertokens.config.Config;
+import io.supertokens.output.Logging;
 import io.supertokens.pluginInterface.multitenancy.TenantIdentifier;
 import io.supertokens.pluginInterface.multitenancy.exceptions.TenantOrAppNotFoundException;
 import io.supertokens.pluginInterface.opentelemetry.OtelProvider;
@@ -116,13 +118,32 @@ public class TelemetryProvider extends ResourceDistributor.SingletonResource imp
     private static OpenTelemetry initializeOpenTelemetry(Main main) {
         String collectorUri = Config.getBaseConfig(main).getOtelCollectorConnectionURI();
 
-        if (GlobalOpenTelemetry.get() != null && !GlobalOpenTelemetry.get().equals(OpenTelemetry.noop())) {
-            return GlobalOpenTelemetry.get(); // already initialized
+        // If a real OpenTelemetry SDK is already installed globally (e.g. by the
+        // --javaagent), reuse it instead of building a duplicate. We must detect
+        // this via the tracer provider, NOT via equals(noop()): GlobalOpenTelemetry
+        // wraps whatever is set in a private ObfuscatedOpenTelemetry that does not
+        // override equals(), so get().equals(OpenTelemetry.noop()) is NEVER true --
+        // even when nothing real was installed and the wrapper merely delegates to
+        // noop. The wrapper does delegate getTracerProvider(), so comparing against
+        // the noop tracer provider correctly distinguishes "agent installed" from
+        // "no agent". Without this, the agent-less path silently returns the noop
+        // SDK and exports nothing.
+        OpenTelemetry global = GlobalOpenTelemetry.get();
+        if (global != null && global.getTracerProvider() != TracerProvider.noop()) {
+            Logging.info(main, TenantIdentifier.BASE_TENANT,
+                    "OpenTelemetry: reusing externally-installed global SDK (e.g. --javaagent); "
+                            + "the core's built-in exporter is not used.", true);
+            return global; // already initialized by a real SDK
         }
 
         if (collectorUri == null || collectorUri.isEmpty()) {
+            Logging.info(main, TenantIdentifier.BASE_TENANT,
+                    "OpenTelemetry telemetry disabled: no otel_collector_connection_uri configured.", true);
             return null;
         }
+
+        Logging.info(main, TenantIdentifier.BASE_TENANT,
+                "OpenTelemetry telemetry enabled: exporting spans and logs to " + collectorUri, true);
 
         if (getInstance(main) != null && getInstance(main).openTelemetry != null) {
             return getInstance(main).openTelemetry; // already initialized
