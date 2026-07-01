@@ -18,11 +18,11 @@ package io.supertokens.telemetry;
 
 import io.opentelemetry.api.GlobalOpenTelemetry;
 import io.opentelemetry.api.OpenTelemetry;
-import io.opentelemetry.api.common.Attributes;
-import io.opentelemetry.api.trace.SpanBuilder;
+import io.opentelemetry.api.common.AttributeKey;
+import io.opentelemetry.api.logs.LogRecordBuilder;
+import io.opentelemetry.api.logs.Severity;
 import io.opentelemetry.api.trace.TracerProvider;
 import io.opentelemetry.api.trace.propagation.W3CTraceContextPropagator;
-import io.opentelemetry.context.Context;
 import io.opentelemetry.context.propagation.ContextPropagators;
 import io.opentelemetry.exporter.otlp.logs.OtlpGrpcLogRecordExporter;
 import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter;
@@ -77,42 +77,45 @@ public class TelemetryProvider extends ResourceDistributor.SingletonResource imp
         if (openTelemetry == null) {
             return; // no telemetry provider available
         }
-        SpanBuilder spanBuilder = createSpanBuilder(tenantIdentifier, logLevel, additionalAttributes);
 
+        // Emit through the LOGS pipeline (LoggerProvider), not the tracer. Log lines
+        // are records, not sampled traces -- they carry a severity and are gated by
+        // log level upstream in Logging.java, so they must not ride the (samplable,
+        // per-line) span path. getLogsBridge() resolves to the built-in
+        // SdkLoggerProvider (BatchLogRecordProcessor -> OTLP), or under --javaagent to
+        // the agent's logger provider; both export OTLP logs to the collector.
+        LogRecordBuilder record = openTelemetry.getLogsBridge()
+                .get("core-logger")
+                .logRecordBuilder()
+                .setTimestamp(System.currentTimeMillis(), TimeUnit.MILLISECONDS)
+                .setSeverity(toSeverity(logLevel))   // Axiom highlights by severity
+                .setSeverityText(logLevel)
+                .setBody(logMessage)
+                .setAttribute(AttributeKey.stringKey("tenant.connectionUriDomain"),
+                        tenantIdentifier.getConnectionUriDomain())
+                .setAttribute(AttributeKey.stringKey("tenant.appId"), tenantIdentifier.getAppId())
+                .setAttribute(AttributeKey.stringKey("tenant.tenantId"), tenantIdentifier.getTenantId());
 
-        spanBuilder.startSpan()
-                .addEvent("log",
-                        Attributes.builder()
-                                .put("message", logMessage)
-                                .build(),
-                        System.currentTimeMillis(), TimeUnit.MILLISECONDS)
-                .end();
-    }
-
-    private SpanBuilder createSpanBuilder(TenantIdentifier tenantIdentifier, String spanName,
-                                          Map<String, String> additionalAttributes) {
-        SpanBuilder spanBuilder = openTelemetry.getTracer("core-tracer")
-                .spanBuilder(spanName)
-                .setParent(Context.current());
-
-        return addAttributesToSpanBuilder(spanBuilder, tenantIdentifier, additionalAttributes);
-    }
-
-    private SpanBuilder addAttributesToSpanBuilder(SpanBuilder spanBuilder, TenantIdentifier tenantIdentifier,
-                                                   Map<String, String> additionalAttributes) {
-        spanBuilder
-                .setAttribute("tenant.connectionUriDomain", tenantIdentifier.getConnectionUriDomain())
-                .setAttribute("tenant.appId", tenantIdentifier.getAppId())
-                .setAttribute("tenant.tenantId", tenantIdentifier.getTenantId());
-
-        if (additionalAttributes != null && !additionalAttributes.isEmpty()) {
-            // Add additional attributes to the span
+        if (additionalAttributes != null) {
             for (Map.Entry<String, String> attribute : additionalAttributes.entrySet()) {
-                spanBuilder.setAttribute(attribute.getKey(), attribute.getValue());
+                record.setAttribute(AttributeKey.stringKey(attribute.getKey()), attribute.getValue());
             }
         }
 
-        return spanBuilder;
+        record.emit();
+    }
+
+    private static Severity toSeverity(String logLevel) {
+        if (logLevel == null) {
+            return Severity.UNDEFINED_SEVERITY_NUMBER;
+        }
+        switch (logLevel.toLowerCase()) {
+            case "debug": return Severity.DEBUG;
+            case "info":  return Severity.INFO;
+            case "warn":  return Severity.WARN;
+            case "error": return Severity.ERROR;
+            default:      return Severity.INFO;
+        }
     }
 
     private static OpenTelemetry initializeOpenTelemetry(Main main) {
