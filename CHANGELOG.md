@@ -7,6 +7,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [12.0.4]
+
+- Fixes an issue with deleting user-id mapped users
+
 ## [12.0.3]
 
 - Adds an append-only `activity_log` audit log; a `user_last_active` event is now written to it whenever a user's last-active timestamp is updated
