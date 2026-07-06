@@ -170,6 +170,70 @@ public class LinkAccountsTest {
     }
 
     @Test
+    public void linkAccountSuccessWithSameEmailWherePrimaryUserIsCreatedFirst() throws Exception {
+        String[] args = {"../"};
+        TestingProcessManager.TestingProcess process = TestingProcessManager.start(args);
+        FeatureFlagTestContent.getInstance(process.getProcess())
+                .setKeyValue(FeatureFlagTestContent.ENABLED_FEATURES, new EE_FEATURES[]{
+                        EE_FEATURES.ACCOUNT_LINKING, EE_FEATURES.MULTI_TENANCY});
+        assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STARTED));
+
+        if (StorageLayer.getStorage(process.getProcess()).getType() != STORAGE_TYPE.SQL) {
+            return;
+        }
+
+        AuthRecipeUserInfo user = EmailPassword.signUp(process.getProcess(), "test@example.com", "password");
+        assert (!user.isPrimaryUser);
+
+        AuthRecipe.createPrimaryUser(process.getProcess(), user.getSupertokensUserId());
+
+        Thread.sleep(50);
+
+        ThirdParty.SignInUpResponse signInUpResponse = ThirdParty.signInUp(process.getProcess(), "google",
+                "user-google",
+                "test@example.com");
+        AuthRecipeUserInfo user2 = signInUpResponse.user;
+        assert (!user2.isPrimaryUser);
+
+        Session.createNewSession(process.getProcess(), user2.getSupertokensUserId(), new JsonObject(), new JsonObject());
+        String[] sessions = Session.getAllNonExpiredSessionHandlesForUser(process.getProcess(), user2.getSupertokensUserId());
+        assert (sessions.length == 1);
+
+        boolean wasAlreadyLinked = AuthRecipe.linkAccounts(process.getProcess(), user2.getSupertokensUserId(),
+                user.getSupertokensUserId()).wasAlreadyLinked;
+        assert (!wasAlreadyLinked);
+
+        AuthRecipeUserInfo refetchUser2 = AuthRecipe.getUserById(process.getProcess(), user2.getSupertokensUserId());
+        AuthRecipeUserInfo refetchUser = AuthRecipe.getUserById(process.getProcess(), user.getSupertokensUserId());
+        assert (refetchUser2.equals(refetchUser));
+        assert (refetchUser2.loginMethods.length == 2);
+        assert (refetchUser.loginMethods[0].equals(user.loginMethods[0]));
+        assert (refetchUser.loginMethods[1].equals(user2.loginMethods[0]));
+        assert (refetchUser.tenantIds.size() == 1);
+        assert (refetchUser.isPrimaryUser);
+        assert (refetchUser.getSupertokensUserId().equals(user.getSupertokensUserId()));
+
+        // cause linkAccounts revokes sessions for the recipe user ID
+        sessions = Session.getAllNonExpiredSessionHandlesForUser(process.getProcess(), user2.getSupertokensUserId());
+        assert (sessions.length == 0);
+
+        Session.createNewSession(process.getProcess(), user2.getSupertokensUserId(), new JsonObject(), new JsonObject());
+        sessions = Session.getAllNonExpiredSessionHandlesForUser(process.getProcess(), user2.getSupertokensUserId());
+        assert (sessions.length == 1);
+
+        wasAlreadyLinked = AuthRecipe.linkAccounts(process.getProcess(), user2.getSupertokensUserId(),
+                user.getSupertokensUserId()).wasAlreadyLinked;
+        assert (wasAlreadyLinked);
+
+        // linking an already linked user is a no-op, so sessions must not be revoked again
+        sessions = Session.getAllNonExpiredSessionHandlesForUser(process.getProcess(), user2.getSupertokensUserId());
+        assert (sessions.length == 1);
+
+        process.kill();
+        assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STOPPED));
+    }
+
+    @Test
     public void testThatLinkingAccountsRequiresAccountLinkingFeatureToBeEnabled() throws Exception {
         String[] args = {"../"};
         TestingProcessManager.TestingProcess process = TestingProcessManager.startIsolatedProcess(args);
