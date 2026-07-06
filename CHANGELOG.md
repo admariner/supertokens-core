@@ -10,9 +10,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [12.0.5]
 
 - Fixes otel init without java agent (with the fresh otel sdk)
+- Resolves the OTel service name from ECS container metadata when available
+- Fixes a 12.0.0 regression of `linkAccounts` to be idempotent when the recipe user is already the target primary user:
+  in non-`LEGACY` migration modes this case now returns `accountsAlreadyLinked=true` (matching pre-12.0 and `LEGACY` behaviour)
+  instead of throwing `CannotLinkSinceRecipeUserIdAlreadyLinkedWithAnotherPrimaryUserIdException`
 - The `migration_mode` transition to `MIGRATED` now also requires the backfill completeness scan
   (`verifyBackfillCompleteness`) to report zero inconsistent users, in addition to `pendingUsers == 0`, so users
   missing reservation rows can no longer be stranded once reads leave the old tables
+- Changing `migration_mode` on an existing tenant (via the multitenancy CRUD endpoint) now takes effect on the
+  live storage instance without a core restart
+- Users signed up while `migration_mode` is `LEGACY` are no longer permanently skipped by the reservation-tables
+  backfill
 
 ## [12.0.4]
 
