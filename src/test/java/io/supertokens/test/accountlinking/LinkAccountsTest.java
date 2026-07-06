@@ -29,8 +29,10 @@ import io.supertokens.featureflag.FeatureFlagTestContent;
 import io.supertokens.featureflag.exceptions.FeatureNotEnabledException;
 import io.supertokens.multitenancy.Multitenancy;
 import io.supertokens.passwordless.Passwordless;
+import io.supertokens.pluginInterface.MigrationMode;
 import io.supertokens.pluginInterface.STORAGE_TYPE;
 import io.supertokens.pluginInterface.Storage;
+import io.supertokens.pluginInterface.migration.MigrationBackfillStorage;
 import io.supertokens.pluginInterface.authRecipe.AuthRecipeUserInfo;
 import io.supertokens.pluginInterface.authRecipe.exceptions.UnknownUserIdException;
 import io.supertokens.pluginInterface.multitenancy.*;
@@ -170,17 +172,36 @@ public class LinkAccountsTest {
     }
 
     @Test
-    public void linkAccountSuccessWithSameEmailWherePrimaryUserIsCreatedFirst() throws Exception {
+    public void linkAccountSuccessWithSameEmailWherePrimaryUserIsCreatedFirstInLegacyMigrationMode()
+            throws Exception {
+        linkAccountSuccessWithSameEmailWherePrimaryUserIsCreatedFirstWithMigrationMode("LEGACY");
+    }
+
+    @Test
+    public void linkAccountSuccessWithSameEmailWherePrimaryUserIsCreatedFirstInMigratedMigrationMode()
+            throws Exception {
+        linkAccountSuccessWithSameEmailWherePrimaryUserIsCreatedFirstWithMigrationMode("MIGRATED");
+    }
+
+    private void linkAccountSuccessWithSameEmailWherePrimaryUserIsCreatedFirstWithMigrationMode(String migrationMode)
+            throws Exception {
+        Utils.setValueInConfig("migration_mode", migrationMode);
         String[] args = {"../"};
-        TestingProcessManager.TestingProcess process = TestingProcessManager.start(args);
+        TestingProcessManager.TestingProcess process = TestingProcessManager.startIsolatedProcess(args, false);
         FeatureFlagTestContent.getInstance(process.getProcess())
                 .setKeyValue(FeatureFlagTestContent.ENABLED_FEATURES, new EE_FEATURES[]{
                         EE_FEATURES.ACCOUNT_LINKING, EE_FEATURES.MULTI_TENANCY});
+        process.startProcess();
         assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STARTED));
 
         if (StorageLayer.getStorage(process.getProcess()).getType() != STORAGE_TYPE.SQL) {
             return;
         }
+
+        // make sure the config override was actually picked up, otherwise both variants
+        // of this test would silently run in the same mode
+        assertEquals(MigrationMode.valueOf(migrationMode),
+                ((MigrationBackfillStorage) StorageLayer.getStorage(process.getProcess())).getMigrationMode());
 
         AuthRecipeUserInfo user = EmailPassword.signUp(process.getProcess(), "test@example.com", "password");
         assert (!user.isPrimaryUser);
