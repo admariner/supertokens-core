@@ -16,11 +16,17 @@
 
 package io.supertokens.test.migration;
 
+import io.supertokens.Main;
 import io.supertokens.ProcessState;
 import io.supertokens.migration.MigrationModeTransition;
 import io.supertokens.pluginInterface.MigrationMode;
+import io.supertokens.pluginInterface.Storage;
 import io.supertokens.pluginInterface.exceptions.InvalidConfigException;
+import io.supertokens.pluginInterface.exceptions.StorageQueryException;
+import io.supertokens.pluginInterface.migration.MigrationBackfillStorage;
 import io.supertokens.pluginInterface.multitenancy.AppIdentifier;
+import io.supertokens.pluginInterface.sqlStorage.SQLStorage;
+import io.supertokens.storageLayer.StorageLayer;
 import io.supertokens.test.TestingProcessManager;
 import io.supertokens.test.Utils;
 
@@ -30,6 +36,11 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TestRule;
 
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Statement;
+
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -45,9 +56,12 @@ import static org.junit.Assert.fail;
  *
  * Every other (old, new) pair must be rejected.
  *
- * The → MIGRATED transition uses {@link MigrationBackfillStorage#getBackfillPendingUsersCount},
- * which on a freshly-started in-memory process with no users returns 0 — so the
- * happy-path forward chain succeeds end-to-end.
+ * The → MIGRATED transition runs two probes — {@link MigrationBackfillStorage#getBackfillPendingUsersCount}
+ * and {@link MigrationBackfillStorage#verifyBackfillCompleteness} — both of which return 0 on a
+ * freshly-started in-memory process with no users, so the happy-path forward chain succeeds
+ * end-to-end. The rejection paths are staged storage-agnostically with row surgery on a
+ * signed-up user: a time_joined = 0 sentinel for the pending probe, and stripped
+ * reservation rows (real time_joined kept) for the completeness scan.
  */
 public class MigrationModeTransitionTest {
 
@@ -153,28 +167,98 @@ public class MigrationModeTransitionTest {
 
     @Test
     public void migratedTransitionRejectedWhenBackfillPending() throws Exception {
-        // Use a stub MigrationBackfillStorage that reports pendingUsers > 0, exercise the
-        // → MIGRATED path directly. We can't easily stage real pending users in InMemoryDB
-        // (it has no backfill notion), so test the rule by going around StorageLayer.
-        // This test asserts the rule by reading the exception thrown when the stub reports pending > 0.
         TestingProcessManager.TestingProcess process = startProcess();
         try {
-            // First flip the storage in the resource distributor to a stub that reports pending=5.
-            // The MigrationModeTransition helper calls StorageLayer.getStorage(...), so we override.
-            // Note: this test only verifies the *rule*. The full integration with a real PG backend
-            // is covered in supertokens-postgresql-plugin's BackfillIntegrationTest.
-            //
-            // Because we can't easily override the storage from InMemoryDB without invasive plumbing,
-            // we instead exercise the negative case via the rule's neighbor check: an attempted
-            // skip-state transition (LEGACY → MIGRATED) is rejected *before* the pending probe runs,
-            // confirming the probe-only-on-→MIGRATED behavior.
-            assertRejected(process, MigrationMode.LEGACY, MigrationMode.MIGRATED, "one step at a time");
+            Main main = process.getProcess();
+            Storage storage = StorageLayer.getStorage(main);
 
-            // And the legitimate DUAL_WRITE_READ_NEW → MIGRATED with no users succeeds (covered above).
+            // Stage a pre-backfill row directly: the 12.0 schema migration leaves
+            // time_joined = 0 (the backfill sentinel) on rows that predate the upgrade.
+            // Raw-SQL staging keeps the test independent of the harness's migration
+            // mode and of any signup write pattern.
+            String uid = "10000000-0000-4000-8000-000000000001";
+            insertAppIdToUserIdRow(storage, uid, 0);
+
+            assertEquals(1, ((MigrationBackfillStorage) storage)
+                    .getBackfillPendingUsersCount(publicApp()));
+
+            assertRejected(process, MigrationMode.DUAL_WRITE_READ_NEW, MigrationMode.MIGRATED,
+                    "still need backfilling");
+
+            // Clean up the staged row — the test database is shared within this class —
+            // and confirm the same transition is allowed once nothing is pending.
+            executeUpdate(storage, "DELETE FROM " + APP_ID_TO_USER_ID_TABLE
+                    + " WHERE user_id = '" + uid + "'");
+            MigrationModeTransition.validate(main, publicApp(),
+                    MigrationMode.DUAL_WRITE_READ_NEW, MigrationMode.MIGRATED);
         } finally {
             process.kill();
             assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STOPPED));
         }
+    }
+
+    /**
+     * A user missing reservation rows but with a real time_joined (the state LEGACY-mode
+     * signups produced before the plugin kept the backfill sentinel) is invisible to the
+     * pending count — only the verify scan sees it. The → MIGRATED transition must be
+     * refused: crossing it removes the old tables from the read path, making such users
+     * unreachable.
+     */
+    @Test
+    public void migratedTransitionRejectedWhenInconsistentUsersExist() throws Exception {
+        TestingProcessManager.TestingProcess process = startProcess();
+        try {
+            Main main = process.getProcess();
+            Storage storage = StorageLayer.getStorage(main);
+
+            // Real time_joined, no reservation rows — the damaged shape.
+            String uid = "10000000-0000-4000-8000-000000000002";
+            insertAppIdToUserIdRow(storage, uid, 1234);
+
+            MigrationBackfillStorage backfillStorage = (MigrationBackfillStorage) storage;
+            assertEquals(0, backfillStorage.getBackfillPendingUsersCount(publicApp()));
+            assertEquals(1, backfillStorage.verifyBackfillCompleteness(publicApp()));
+
+            assertRejected(process, MigrationMode.DUAL_WRITE_READ_NEW, MigrationMode.MIGRATED,
+                    "inconsistent");
+
+            // Remediate (here: drop the orphan entirely) and the same transition is allowed.
+            executeUpdate(storage, "DELETE FROM " + APP_ID_TO_USER_ID_TABLE
+                    + " WHERE user_id = '" + uid + "'");
+            assertEquals(0, backfillStorage.verifyBackfillCompleteness(publicApp()));
+            MigrationModeTransition.validate(main, publicApp(),
+                    MigrationMode.DUAL_WRITE_READ_NEW, MigrationMode.MIGRATED);
+        } finally {
+            process.kill();
+            assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STOPPED));
+        }
+    }
+
+    // Default table name, shared by the in-memory schema and the plugin defaults used in
+    // CI (no custom table-name prefixes are configured in the test env).
+    private static final String APP_ID_TO_USER_ID_TABLE = "app_id_to_user_id";
+
+    private static void insertAppIdToUserIdRow(Storage storage, String userId, long timeJoined)
+            throws Exception {
+        executeUpdate(storage, "INSERT INTO " + APP_ID_TO_USER_ID_TABLE
+                + " (app_id, user_id, recipe_id, primary_or_recipe_user_id,"
+                + "  time_joined, primary_or_recipe_user_time_joined)"
+                + " VALUES ('public', '" + userId + "', 'emailpassword', '" + userId + "', "
+                + timeJoined + ", " + timeJoined + ")");
+    }
+
+    private static void executeUpdate(Storage storage, String sql) throws Exception {
+        int affected = ((SQLStorage) storage).startTransaction(con -> {
+            Connection sqlCon = (Connection) con.getConnection();
+            try (Statement stmt = sqlCon.createStatement()) {
+                int rows = stmt.executeUpdate(sql);
+                sqlCon.commit();
+                return rows;
+            } catch (SQLException e) {
+                throw new StorageQueryException(e);
+            }
+        });
+        assertTrue("staging statement matched no rows: " + sql, affected >= 1);
     }
 
     @Test

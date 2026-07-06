@@ -4305,18 +4305,30 @@ public class Start
     }
 
     @Override
-    public int getBackfillPendingUsersCount(AppIdentifier appIdentifier) {
-        return 0; // InMemoryDB always has all data in sync
+    public int getBackfillPendingUsersCount(AppIdentifier appIdentifier) throws StorageQueryException {
+        try {
+            return MigrationBackfillQueries.getBackfillPendingUsersCount(this, appIdentifier);
+        } catch (SQLException e) {
+            throw new StorageQueryException(e);
+        }
     }
 
     @Override
     public int backfillUsersBatch(AppIdentifier appIdentifier, int batchSize) {
-        return 0; // Nothing to backfill in InMemoryDB
+        // The in-memory DB starts empty every process, so it never holds pre-12.0
+        // legacy rows for the backfill to repair. The counts above are still real
+        // queries so that core rules built on them (e.g. the → MIGRATED transition
+        // guard) can be exercised against staged data in tests.
+        return 0;
     }
 
     @Override
-    public int verifyBackfillCompleteness(AppIdentifier appIdentifier) {
-        return 0; // Always consistent in InMemoryDB
+    public int verifyBackfillCompleteness(AppIdentifier appIdentifier) throws StorageQueryException {
+        try {
+            return MigrationBackfillQueries.verifyBackfillCompleteness(this, appIdentifier);
+        } catch (SQLException e) {
+            throw new StorageQueryException(e);
+        }
     }
 
     // ActivityLogStorage implementation
