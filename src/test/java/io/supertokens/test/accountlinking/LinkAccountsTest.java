@@ -198,6 +198,14 @@ public class LinkAccountsTest {
             return;
         }
 
+        // The in-memory storage does not honor migration_mode from the config: it reports a
+        // hardcoded MIGRATED (SQLiteConfig.getMigrationMode) and its account-linking checks are
+        // pinned to the new-tables queries, so LEGACY-mode linking cannot be exercised on it.
+        // Mode-dependent coverage for this flow lives in the postgresql matrix.
+        if (StorageLayer.isInMemDb(process.getProcess())) {
+            return;
+        }
+
         // make sure the config override was actually picked up, otherwise both variants
         // of this test would silently run in the same mode
         assertEquals(MigrationMode.valueOf(migrationMode),
