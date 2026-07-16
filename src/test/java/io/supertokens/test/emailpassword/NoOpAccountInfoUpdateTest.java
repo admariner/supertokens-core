@@ -23,6 +23,8 @@ import io.supertokens.emailpassword.EmailPassword;
 import io.supertokens.emailpassword.exceptions.WrongCredentialsException;
 import io.supertokens.featureflag.EE_FEATURES;
 import io.supertokens.featureflag.FeatureFlagTestContent;
+import io.supertokens.inmemorydb.ConnectionPool;
+import io.supertokens.inmemorydb.Start;
 import io.supertokens.multitenancy.Multitenancy;
 import io.supertokens.passwordless.Passwordless;
 import io.supertokens.pluginInterface.MigrationMode;
@@ -36,8 +38,13 @@ import io.supertokens.pluginInterface.multitenancy.*;
 import io.supertokens.storageLayer.StorageLayer;
 import io.supertokens.test.TestingProcessManager;
 import io.supertokens.test.Utils;
+import io.supertokens.thirdparty.ThirdParty;
 
 import com.google.gson.JsonObject;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 
 import org.junit.AfterClass;
 import org.junit.Before;
@@ -350,5 +357,144 @@ public class NoOpAccountInfoUpdateTest {
     @Test
     public void testSamePhoneUpdateWithNewEmailInMigratedMode() throws Exception {
         runSamePhoneAddEmailScenario(MigrationMode.MIGRATED);
+    }
+
+    private static final String THIRD_PARTY_ID = "google";
+    private static final String THIRD_PARTY_USER_ID = "tp-user-1";
+
+    /**
+     * Thirdparty variant, covering the source-row filters in QUERY_2_INSERT /
+     * QUERY_2_UPSERT of updateAccountInfo_Transaction. For thirdparty users the new
+     * tables hold TWO rows per tenant — an 'email' row carrying the real
+     * third_party_id/user_id and a 'tparty' row with empty tp ids. An email change must
+     * derive replacement rows only from the 'email' row: without the filter a second,
+     * spurious 'email' row with empty tp ids is silently inserted (no error is raised,
+     * because the differing tp ids are part of the PK).
+     *
+     * Because the corruption is silent, behavioral assertions alone can't catch it: the
+     * test also asserts the exact row set in recipe_user_tenants /
+     * recipe_user_account_infos after each change. Row-level inspection is only wired up
+     * for the in-memory db (which runs MIGRATED mode); on real plugins the behavioral
+     * assertions still run.
+     *
+     * The email is changed twice (a -> b -> c) because a spurious row left by the first
+     * change only multiplies through subsequent derivations, and finished with a
+     * same-email signInUp, which must remain a successful no-op.
+     */
+    private void runThirdPartyEmailChangeScenario(MigrationMode mode) throws Exception {
+        Utils.setValueInConfig("migration_mode", mode.name());
+        String[] args = {"../"};
+        TestingProcessManager.TestingProcess process = TestingProcessManager.startIsolatedProcess(args, false);
+        process.startProcess();
+        assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STARTED));
+        try {
+            Main main = process.getProcess();
+            if (StorageLayer.getStorage(main).getType() != STORAGE_TYPE.SQL) {
+                return;
+            }
+            // in-memory hardcodes MIGRATED; see runSameEmailNewPasswordScenario
+            if (StorageLayer.isInMemDb(main) && mode != MigrationMode.MIGRATED) {
+                return;
+            }
+            assertEquals(mode,
+                    ((MigrationBackfillStorage) StorageLayer.getStorage(main)).getMigrationMode());
+
+            ThirdParty.SignInUpResponse signUp = ThirdParty.signInUp(main, THIRD_PARTY_ID, THIRD_PARTY_USER_ID,
+                    "a@example.com");
+            String uid = signUp.user.getSupertokensUserId();
+            if (mode.writesToNewTables()) {
+                assertCanonicalThirdPartyRows(main, uid, "a@example.com");
+            }
+
+            // First email change: this is the path that derives replacement new-table
+            // rows from the user's existing rows.
+            ThirdParty.SignInUpResponse changed = ThirdParty.signInUp(main, THIRD_PARTY_ID, THIRD_PARTY_USER_ID,
+                    "b@example.com");
+            assertEquals(uid, changed.user.getSupertokensUserId());
+            assertEquals("b@example.com", changed.user.loginMethods[0].email);
+            if (mode.writesToNewTables()) {
+                assertCanonicalThirdPartyRows(main, uid, "b@example.com");
+            }
+
+            // Second change: a spurious row left by the first change would be picked up
+            // as a source row here and multiply.
+            ThirdParty.SignInUpResponse changedAgain = ThirdParty.signInUp(main, THIRD_PARTY_ID, THIRD_PARTY_USER_ID,
+                    "c@example.com");
+            assertEquals(uid, changedAgain.user.getSupertokensUserId());
+            assertEquals("c@example.com", changedAgain.user.loginMethods[0].email);
+            if (mode.writesToNewTables()) {
+                assertCanonicalThirdPartyRows(main, uid, "c@example.com");
+            }
+
+            // No-op: signing in again with the unchanged email must succeed and change
+            // nothing.
+            ThirdParty.SignInUpResponse noOp = ThirdParty.signInUp(main, THIRD_PARTY_ID, THIRD_PARTY_USER_ID,
+                    "c@example.com");
+            assertEquals(uid, noOp.user.getSupertokensUserId());
+            assertEquals("c@example.com", noOp.user.loginMethods[0].email);
+            if (mode.writesToNewTables()) {
+                assertCanonicalThirdPartyRows(main, uid, "c@example.com");
+            }
+        } finally {
+            process.kill();
+            assertNotNull(process.checkOrWaitForEvent(ProcessState.PROCESS_STATE.STOPPED));
+        }
+    }
+
+    /**
+     * Asserts that the user has EXACTLY ONE 'email' row in recipe_user_tenants and in
+     * recipe_user_account_infos, carrying the real third-party ids and the expected
+     * value. A second 'email' row with empty tp ids is the corruption the source-row
+     * filters prevent. In-memory db only; no-op on other storages.
+     */
+    private void assertCanonicalThirdPartyRows(Main main, String userId, String expectedEmail) throws Exception {
+        if (!StorageLayer.isInMemDb(main)) {
+            return;
+        }
+        Start start = (Start) StorageLayer.getStorage(main);
+        try (Connection con = ConnectionPool.getConnection(start)) {
+            for (String table : new String[]{"recipe_user_tenants", "recipe_user_account_infos"}) {
+                try (PreparedStatement pst = con.prepareStatement(
+                        "SELECT third_party_id, third_party_user_id, account_info_value FROM " + table
+                                + " WHERE app_id = 'public' AND recipe_user_id = ? AND account_info_type = 'email'")) {
+                    pst.setString(1, userId);
+                    try (ResultSet result = pst.executeQuery()) {
+                        assertTrue("expected an 'email' row in " + table, result.next());
+                        assertEquals("the 'email' row in " + table + " must carry the real third_party_id",
+                                THIRD_PARTY_ID, result.getString("third_party_id"));
+                        assertEquals("the 'email' row in " + table + " must carry the real third_party_user_id",
+                                THIRD_PARTY_USER_ID, result.getString("third_party_user_id"));
+                        assertEquals(expectedEmail, result.getString("account_info_value"));
+                        assertFalse("spurious extra 'email' row in " + table
+                                        + " — the source-row filter in updateAccountInfo_Transaction is not working",
+                                result.next());
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Control: LEGACY mode does not write to the new tables, so only the behavioral
+     * assertions apply.
+     */
+    @Test
+    public void testThirdPartyEmailChangeInLegacyMode() throws Exception {
+        runThirdPartyEmailChangeScenario(MigrationMode.LEGACY);
+    }
+
+    @Test
+    public void testThirdPartyEmailChangeInDualWriteReadOldMode() throws Exception {
+        runThirdPartyEmailChangeScenario(MigrationMode.DUAL_WRITE_READ_OLD);
+    }
+
+    @Test
+    public void testThirdPartyEmailChangeInDualWriteReadNewMode() throws Exception {
+        runThirdPartyEmailChangeScenario(MigrationMode.DUAL_WRITE_READ_NEW);
+    }
+
+    @Test
+    public void testThirdPartyEmailChangeInMigratedMode() throws Exception {
+        runThirdPartyEmailChangeScenario(MigrationMode.MIGRATED);
     }
 }
