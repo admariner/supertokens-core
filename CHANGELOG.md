@@ -7,6 +7,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [12.0.7]
+
+- Fix no-op account info updates
+
 ## [12.0.6]
 
 - Upgrade dependencies to go beyond known CVE's.
